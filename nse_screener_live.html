@@ -1117,20 +1117,46 @@ async function fetchS(sym) {
     if (vld.length < 22) return null;
 
     const price  = meta.regularMarketPrice || vld[vld.length - 1].c;
-    // pctChange: price vs chartPreviousClose (Yahoo's official display prev close)
-    // This matches what NSE/broker apps show. More reliable than regularMarketChangePercent
-    // which can be stale, decimal-form, or reference a wrong adjusted base for NSE stocks.
+    // pctChange: Use the most reliable source available, cross-validated.
+    // Strategy:
+    //   A) regularMarketChangePercent — Yahoo's own calc, good when < ±15%
+    //   B) chartPreviousClose — official prev close for display, accurate for normal days
+    //   C) vld[-2].c — last two adjusted daily closes, fallback
+    // Pick the value that is smallest in absolute terms when sources disagree >3%
+    // This handles: stale meta fields, bonus/split mismatches, wrong adjusted bases
     let pct;
+    const rmcp   = meta.regularMarketChangePercent;  // Yahoo's own % (sometimes wrong)
     const prevClose = meta.chartPreviousClose || meta.previousClose;
-    if (prevClose && prevClose > 0) {
-      pct = ((price - prevClose) / prevClose) * 100;
+
+    const pctA = (rmcp != null && isFinite(rmcp)) ? rmcp : null;
+    const pctB = (prevClose && prevClose > 0) ? ((price - prevClose) / prevClose * 100) : null;
+    const prev2 = vld[vld.length - 2]?.c;
+    const pctC = (prev2 && prev2 > 0) ? ((price - prev2) / prev2 * 100) : null;
+
+    // Collect all valid candidates, prefer the one with smallest absolute value
+    // Rationale: when Yahoo meta fields are wrong, they always show LARGE wrong values
+    // (bonus/split mismatch, stale adjusted base, wrong corp-action reference)
+    // The correct day change for most stocks is < 5%; bad values are 8%, 20%, 25%+
+    // So picking the minimum absolute value among reasonable candidates is the safest heuristic
+    const candidates = [pctA, pctB, pctC].filter(v => v !== null && isFinite(v));
+    if (candidates.length === 0) {
+      pct = 0;
+    } else if (candidates.length === 1) {
+      pct = candidates[0];
     } else {
-      // Last resort: compare last two daily closes
-      const prev2 = vld[vld.length - 2]?.c || price;
-      pct = prev2 > 0 ? ((price - prev2) / prev2) * 100 : 0;
+      // If all agree within 3%, use pctB (chartPreviousClose — most display-accurate)
+      const min = Math.min(...candidates.map(Math.abs));
+      const max = Math.max(...candidates.map(Math.abs));
+      if (max - min <= 3) {
+        pct = pctB !== null ? pctB : candidates[0];
+      } else {
+        // Sources disagree — pick the one with smallest absolute value
+        // (wrong Yahoo meta values are always the large outliers)
+        pct = candidates.reduce((a, b) => Math.abs(a) < Math.abs(b) ? a : b);
+      }
     }
-    // Sanity cap ±25% (NSE circuit = 20%, allow slight buffer for valid pre-open moves)
-    pct = Math.max(-25, Math.min(25, pct));
+    // Hard cap ±20% (NSE circuit breaker limit)
+    pct = Math.max(-20, Math.min(20, pct));
     const mcap   = meta.marketCap || 0;
     const name   = meta.longName || meta.shortName || decodeURIComponent(sym);
     const sector = SM[sym] || 'Others';
