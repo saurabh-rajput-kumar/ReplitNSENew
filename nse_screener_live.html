@@ -1117,29 +1117,16 @@ async function fetchS(sym) {
     if (vld.length < 22) return null;
 
     const price  = meta.regularMarketPrice || vld[vld.length - 1].c;
-    // pctChange: Use regularMarketChangePercent (Yahoo's own calc) as primary,
-    // cross-checked against last two adjusted daily closes.
-    // If they disagree by more than 3%, trust the closes — Yahoo's adjusted close
-    // array is always correctly split/bonus adjusted, whereas rmcp can reference
-    // a stale or wrong base (causing FINOPB=20%, MAPMYINDIA=8.82%, BHARTIARTL=25%).
+    // Use Yahoo's own calculated change% — most reliable, already accounts for corp actions
+    // Fallback: compute from last two adjusted daily bars (NOT chartPreviousClose which is unadjusted)
     let pct;
-    const rmcp  = meta.regularMarketChangePercent;
-    const prev2 = vld[vld.length - 2]?.c;
-    const pctFromCloses = (prev2 && prev2 > 0) ? ((price - prev2) / prev2 * 100) : null;
-
-    if (rmcp != null && isFinite(rmcp)) {
-      if (pctFromCloses !== null && Math.abs(rmcp - pctFromCloses) > 3) {
-        // rmcp and closes disagree — closes are more reliable
-        pct = pctFromCloses;
-      } else {
-        // They agree (within 3%) — use rmcp (Yahoo's own calculation)
-        pct = rmcp;
-      }
+    if (meta.regularMarketChangePercent != null && isFinite(meta.regularMarketChangePercent)) {
+      pct = meta.regularMarketChangePercent;
     } else {
-      // rmcp missing — fall back to adjusted closes
-      pct = pctFromCloses !== null ? pctFromCloses : 0;
+      const prev2 = vld[vld.length - 2]?.c || price;
+      pct = prev2 > 0 ? ((price - prev2) / prev2) * 100 : 0;
     }
-    // Hard cap ±20% (NSE circuit breaker limit)
+    // Hard cap: NSE circuit breaker = ±20%. Anything beyond is bad data (bonus/split metadata mismatch)
     pct = Math.max(-20, Math.min(20, pct));
     const mcap   = meta.marketCap || 0;
     const name   = meta.longName || meta.shortName || decodeURIComponent(sym);
