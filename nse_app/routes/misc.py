@@ -221,3 +221,140 @@ def visitors():
         live  = sum(1 for v in _visitors["active"].values() if v >= cutoff)
         today = len(_visitors["today_ips"])
     return jsonify({"live": live, "today": today})
+
+
+# ── Option Chain (PCR / OI / Max Pain) ────────────────────────────────────────
+
+@bp.route("/api/option-chain")
+def option_chain():
+    """
+    Fetch NSE option chain and compute:
+    - PCR (Put-Call Ratio by OI)
+    - Max Pain strike
+    - Top CE/PE OI strikes (resistance/support)
+    - OI change leaders
+    - Market direction signal in plain English
+    """
+    symbol = freq.args.get("symbol", "NIFTY").upper().strip()
+
+    NSE_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept":          "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer":         "https://www.nseindia.com/option-chain",
+        "Connection":      "keep-alive",
+    }
+
+    try:
+        import requests as _req
+        sess = _req.Session()
+        sess.headers.update(NSE_HEADERS)
+        sess.get("https://www.nseindia.com", timeout=10)
+
+        url = (f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+               if symbol in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX")
+               else f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}")
+
+        r = sess.get(url, timeout=15)
+        if not r.ok:
+            return jsonify({"error": f"NSE API returned {r.status_code}. Try during market hours."}), 502
+        data = r.json()
+    except Exception as e:
+        return jsonify({"error": f"NSE fetch failed: {str(e)[:120]}"}), 502
+
+    try:
+        records = data["records"]
+        spot    = records["underlyingValue"]
+        expiry  = records["expiryDates"][0]
+        chain   = [row for row in records["data"] if row.get("expiryDate") == expiry]
+
+        # PCR
+        total_ce_oi = sum(r["CE"]["openInterest"] for r in chain if "CE" in r)
+        total_pe_oi = sum(r["PE"]["openInterest"] for r in chain if "PE" in r)
+        pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 1.0
+
+        # Max Pain
+        strikes_all = sorted(set(r.get("strikePrice", 0) for r in chain))
+
+        def total_pain(ep):
+            return sum(
+                r["CE"]["openInterest"] * max(0, r["strikePrice"] - ep) +
+                r["PE"]["openInterest"] * max(0, ep - r["strikePrice"])
+                for r in chain if "CE" in r and "PE" in r
+            )
+
+        max_pain = min(strikes_all, key=total_pain) if strikes_all else int(spot)
+
+        # Heatmap — strikes near spot
+        step   = 50 if symbol == "NIFTY" else (100 if symbol == "BANKNIFTY" else 50)
+        near   = sorted(k for k in strikes_all if abs(k - spot) <= step * 12)
+        heatmap = [{"strike": k,
+                    "ceOI":    next((r["CE"]["openInterest"]          for r in chain if r.get("strikePrice")==k and "CE" in r), 0),
+                    "peOI":    next((r["PE"]["openInterest"]          for r in chain if r.get("strikePrice")==k and "PE" in r), 0),
+                    "ceOIChg": next((r["CE"].get("changeinOpenInterest",0) for r in chain if r.get("strikePrice")==k and "CE" in r), 0),
+                    "peOIChg": next((r["PE"].get("changeinOpenInterest",0) for r in chain if r.get("strikePrice")==k and "PE" in r), 0),
+                   } for k in near]
+
+        # Top CE above spot (resistance)
+        ce_above = sorted(
+            [{"strike": r["strikePrice"], "oi": r["CE"]["openInterest"],
+              "oiChange": r["CE"].get("changeinOpenInterest", 0)}
+             for r in chain if "CE" in r and r["strikePrice"] >= spot],
+            key=lambda x: -x["oi"])[:4]
+
+        # Top PE below spot (support)
+        pe_below = sorted(
+            [{"strike": r["strikePrice"], "oi": r["PE"]["openInterest"],
+              "oiChange": r["PE"].get("changeinOpenInterest", 0)}
+             for r in chain if "PE" in r and r["strikePrice"] <= spot],
+            key=lambda x: -x["oi"])[:4]
+
+        # Signal
+        res_str = f"₹{ce_above[0]['strike']}" if ce_above else "N/A"
+        sup_str = f"₹{pe_below[0]['strike']}" if pe_below else "N/A"
+        mp_str  = f"₹{int(max_pain)}"
+
+        if pcr >= 1.3:
+            signal = "BULLISH"
+            detail = (f"PCR {pcr} is high — more puts being written than calls. Option sellers (smart money) expect market to hold above {sup_str}. "
+                      f"Strong put wall at {sup_str} = key support. Call wall at {res_str} = resistance. "
+                      f"Max pain {mp_str} — if expiry is near, expect price to pin around this level. "
+                      f"Strategy: buy on dips near {sup_str}, target {res_str}.")
+        elif pcr <= 0.7:
+            signal = "BEARISH"
+            detail = (f"PCR {pcr} is low — excessive call writing / put buying. Bears are in control. "
+                      f"Sellers are aggressively writing calls at {res_str} — strong ceiling. "
+                      f"Max pain {mp_str}. Support at {sup_str} may be tested. "
+                      f"Strategy: sell rallies near {res_str}, watch for breakdown below {sup_str}.")
+        else:
+            signal = "NEUTRAL"
+            detail = (f"PCR {pcr} is neutral (0.7–1.3) — market is balanced between bulls and bears. "
+                      f"Key range: {sup_str} (put wall = support) to {res_str} (call wall = resistance). "
+                      f"Max pain {mp_str} — price likely to consolidate near this level near expiry. "
+                      f"Wait for PCR above 1.3 (buy signal) or below 0.7 (sell signal) before taking directional trades.")
+
+        spot_vs_mp = spot - max_pain
+        if abs(spot_vs_mp) > step:
+            detail += (f" Market is {'above' if spot_vs_mp > 0 else 'below'} max pain by {abs(spot_vs_mp):.0f} pts — "
+                       f"expect {'downward' if spot_vs_mp > 0 else 'upward'} gravitational pull as expiry approaches.")
+
+        return jsonify({
+            "symbol":       symbol,
+            "expiry":       expiry,
+            "spotPrice":    spot,
+            "pcr":          pcr,
+            "maxPain":      int(max_pain),
+            "totalCEOI":    total_ce_oi,
+            "totalPEOI":    total_pe_oi,
+            "resistances":  ce_above[:3],
+            "supports":     pe_below[:3],
+            "topCE":        ce_above[:3],
+            "topPE":        pe_below[:3],
+            "strikes":      heatmap,
+            "signal":       signal,
+            "signalDetail": detail,
+        })
+
+    except Exception as e:
+        print(f"[OptionChain] {e}")
+        return jsonify({"error": f"Parse error: {str(e)[:120]}"}), 500
