@@ -4,15 +4,20 @@ Chart proxy routes — stream Yahoo Finance data to the frontend.
 /api/chart-extended up to 5y daily bars
 /api/chart-5m       5-min bars
 """
+import os
 from flask import Blueprint, request as freq, jsonify, Response, send_file
 from ..core.data import fetch_yahoo
 
 bp = Blueprint("charts", __name__)
 
+# Absolute path to HTML — works regardless of working directory
+HTML_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "nse_screener_live.html")
+HTML_PATH = os.path.abspath(HTML_PATH)
+
 
 @bp.route("/")
 def index():
-    return send_file("nse_screener_live.html")
+    return send_file(HTML_PATH)
 
 
 @bp.route("/api/chart")
