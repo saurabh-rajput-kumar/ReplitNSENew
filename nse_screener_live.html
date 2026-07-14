@@ -1117,17 +1117,20 @@ async function fetchS(sym) {
     if (vld.length < 22) return null;
 
     const price  = meta.regularMarketPrice || vld[vld.length - 1].c;
-    // Use Yahoo's own calculated change% — most reliable, already accounts for corp actions
-    // Fallback: compute from last two adjusted daily bars (NOT chartPreviousClose which is unadjusted)
+    // pctChange: price vs chartPreviousClose (Yahoo's official display prev close)
+    // This matches what NSE/broker apps show. More reliable than regularMarketChangePercent
+    // which can be stale, decimal-form, or reference a wrong adjusted base for NSE stocks.
     let pct;
-    if (meta.regularMarketChangePercent != null && isFinite(meta.regularMarketChangePercent)) {
-      pct = meta.regularMarketChangePercent;
+    const prevClose = meta.chartPreviousClose || meta.previousClose;
+    if (prevClose && prevClose > 0) {
+      pct = ((price - prevClose) / prevClose) * 100;
     } else {
+      // Last resort: compare last two daily closes
       const prev2 = vld[vld.length - 2]?.c || price;
       pct = prev2 > 0 ? ((price - prev2) / prev2) * 100 : 0;
     }
-    // Hard cap: NSE circuit breaker = ±20%. Anything beyond is bad data (bonus/split metadata mismatch)
-    pct = Math.max(-20, Math.min(20, pct));
+    // Sanity cap ±25% (NSE circuit = 20%, allow slight buffer for valid pre-open moves)
+    pct = Math.max(-25, Math.min(25, pct));
     const mcap   = meta.marketCap || 0;
     const name   = meta.longName || meta.shortName || decodeURIComponent(sym);
     const sector = SM[sym] || 'Others';
@@ -1155,14 +1158,6 @@ async function fetchS(sym) {
     let red = 0;
     for (let i = c_.length - 1; i > 0; i--) { if (c_[i] < c_[i-1]) red++; else break; }
 
-    // Week change: use last completed weekly candle open (5 daily bars ago block)
-    // c_[c_.length-6] was wrong — it's just 6 trading days, not a real week boundary
-    // Correct: open of the current week's candle = close of 5 bars ago (last weekly open)
-    const weekStartIdx = Math.max(0, c_.length - 6);  // ~1 week ago (Mon open proxy)
-    const wkAgo = wkly.length >= 2 ? wkly[wkly.length - 2].c : c_[weekStartIdx] || c_[0];
-    const wkChgRaw = wkAgo > 0 ? ((price - wkAgo) / wkAgo) * 100 : 0;
-    const wkChg = Math.max(-40, Math.min(40, wkChgRaw)); // sanity cap ±40%
-
     const sr = src(c_, h_, l_, price);
 
     // Build weekly candles from daily data (aggregate every 5 days)
@@ -1174,6 +1169,12 @@ async function fetchS(sym) {
         c: wc[wc.length - 1], v: wv.reduce((a, b) => a + b, 0)
       });
     }
+
+    // Week change: prior completed weekly candle close vs current price
+    // Must be computed AFTER wkly is built above
+    const wkAgo = wkly.length >= 2 ? wkly[wkly.length - 2].c : (c_.length >= 6 ? c_[c_.length - 6] : c_[0]);
+    const wkChgRaw = wkAgo > 0 ? ((price - wkAgo) / wkAgo) * 100 : 0;
+    const wkChg = Math.max(-40, Math.min(40, wkChgRaw)); // sanity cap ±40%
 
     // Filter timestamps to match valid OHLCV indices
     const rawTs = res.timestamp || [];
