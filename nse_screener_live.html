@@ -2388,109 +2388,131 @@ function buildSC(data,filter='all'){
 function buildTreemap(data){
   const el=document.getElementById('sec-treemap');
   if(!el||!data||!data.length)return;
-  const W=el.offsetWidth||300;
+  const W=el.offsetWidth||320;
+  const H=Math.max(200,Math.round(W*0.65));
+  el.style.height=H+'px';
+  el.style.position='relative';
 
-  // Box area proportional to absolute weekly move (min 1%)
-  const vals=data.map(s=>Math.max(Math.abs(s.avgW),0.5));
+  // Area = absolute weekly move (min 0.8 so tiny sectors still show)
+  const vals=data.map(s=>Math.max(Math.abs(s.avgW),0.8));
   const total=vals.reduce((a,b)=>a+b,0);
-  const TOTAL_H=Math.max(180,Math.round(W*0.55)); // responsive height
+  const GAP=2; // gap between boxes in px
 
-  // Squarify algorithm
-  function squarify(items,x,y,w,h,out){
-    if(!items.length)return;
-    if(items.length===1){out.push({...items[0],x,y,w,h});return;}
-    // Split into two groups by area
-    const totA=items.reduce((a,b)=>a+b.area,0);
-    let half=0,best=Infinity,split=0;
-    for(let i=0;i<items.length;i++){
-      half+=items[i].area;
-      const ratio=half/(totA-half);
-      const score=Math.abs(ratio-1);
-      if(score<best){best=score;split=i+1;}
-    }
-    const g1=items.slice(0,split),g2=items.slice(split);
-    const a1=g1.reduce((a,b)=>a+b.area,0)/totA;
-    if(w>=h){
-      const w1=w*a1;
-      layoutRow(g1,x,y,w1,h,out);
-      squarify(g2,x+w1,y,w-w1,h,out);
-    }else{
-      const h1=h*a1;
-      layoutRow(g1,x,y,w,h1,out);
-      squarify(g2,x,y+h1,w,h-h1,out);
-    }
+  // ── True squarified treemap (Bruls et al.) ─────────────────────────────────
+  // Normalised areas in px²
+  const totalArea=W*H;
+  const items=data.map((s,i)=>({
+    ...s,
+    area:(vals[i]/total)*totalArea,
+    breakout:isBreakout(s),
+  })).sort((a,b)=>b.area-a.area);
+
+  function worstRatio(row,len,shortSide){
+    const s=row.reduce((a,b)=>a+b.area,0);
+    const maxA=Math.max(...row.map(r=>r.area));
+    const minA=Math.min(...row.map(r=>r.area));
+    return Math.max((shortSide*shortSide*maxA)/(s*s),(s*s)/(shortSide*shortSide*minA));
   }
 
-  function layoutRow(items,x,y,w,h,out){
-    const tot=items.reduce((a,b)=>a+b.area,0);
+  function layoutRow(row,x,y,w,h,out){
+    const s=row.reduce((a,b)=>a+b.area,0);
     let cx=x,cy=y;
-    items.forEach(item=>{
-      const frac=item.area/tot;
-      if(w>=h){
-        const iw=w,ih=h*frac;
-        out.push({...item,x:cx,y:cy,w:iw,h:ih});
-        cy+=ih;
-      }else{
-        const iw=w*frac,ih=h;
-        out.push({...item,x:cx,y:cy,w:iw,h:ih});
-        cx+=iw;
+    row.forEach(item=>{
+      if(w<h){// horizontal strip — stack vertically
+        const bh=s>0?(item.area/s)*h:0;
+        out.push({...item,x:cx,y:cy,w,h:bh});
+        cy+=bh;
+      }else{// vertical strip — stack horizontally
+        const bw=s>0?(item.area/s)*w:0;
+        out.push({...item,x:cx,y:cy,w:bw,h});
+        cx+=bw;
       }
     });
   }
 
-  // Prepare items with areas
-  const items=data.map((s,i)=>({
-    ...s,
-    area:(vals[i]/total)*W*TOTAL_H,
-    breakout:isBreakout(s),
-  })).sort((a,b)=>b.area-a.area);
+  function squarify(items,x,y,w,h,out){
+    if(!items.length)return;
+    if(items.length===1){out.push({...items[0],x,y,w,h});return;}
+    const shortSide=Math.min(w,h);
+    let row=[];
+    let i=0;
+    while(i<items.length){
+      const next=[...row,items[i]];
+      if(row.length===0||worstRatio(next,next.length,shortSide)<=worstRatio(row,row.length,shortSide)){
+        row=next;i++;
+      }else{
+        // Lay out current row
+        const s=row.reduce((a,b)=>a+b.area,0);
+        const frac=s/(w*h);
+        if(w>=h){
+          const rw=w*frac;
+          layoutRow(row,x,y,rw,h,out);
+          squarify(items.slice(i),x+rw,y,w-rw,h,out);
+        }else{
+          const rh=h*frac;
+          layoutRow(row,x,y,w,rh,out);
+          squarify(items.slice(i),x,y+rh,w,h-rh,out);
+        }
+        return;
+      }
+    }
+    // Lay out remaining row
+    const s=row.reduce((a,b)=>a+b.area,0);
+    const frac=s/(w*h);
+    if(w>=h){
+      const rw=w*frac;
+      layoutRow(row,x,y,rw,h,out);
+    }else{
+      const rh=h*frac;
+      layoutRow(row,x,y,w,rh,out);
+    }
+  }
 
   const boxes=[];
-  squarify(items,0,0,W,TOTAL_H,boxes);
+  squarify(items,0,0,W,H,boxes);
 
-  // Render
-  el.style.height=TOTAL_H+'px';
-  el.style.position='relative';
+  // ── Render ─────────────────────────────────────────────────────────────────
   el.innerHTML=boxes.map(b=>{
-    const col=SC[b.name]||'#636e72';
+    const bx=b.x+GAP/2, by=b.y+GAP/2;
+    const bw=Math.max(b.w-GAP,4), bh=Math.max(b.h-GAP,4);
     const isRise=b.avgW>=0;
-    const intensity=Math.min(Math.abs(b.avgW)/5,1); // 5% = full intensity
-    const dColor=b.avgD>=0?'var(--green)':'var(--red)';
-    const wColor=b.avgW>=0?'var(--green)':'var(--red)';
+    const intensity=Math.min(Math.abs(b.avgW)/4,1);
     const bg=isRise
-      ?`rgba(0,212,154,${0.12+intensity*0.35})`
-      :`rgba(255,69,96,${0.12+intensity*0.35})`;
-    const border=isRise?'rgba(0,212,154,.4)':'rgba(255,69,96,.4)';
-    const showFire=b.breakout?'🔥 ':isRise?'▲ ':'▼ ';
-    // Only show text if box is big enough
-    const showLabel=b.w>55&&b.h>30;
-    const showFull =b.w>80&&b.h>52;
+      ?`rgba(0,212,154,${(0.18+intensity*0.42).toFixed(2)})`
+      :`rgba(255,69,96,${(0.18+intensity*0.42).toFixed(2)})`;
+    const border=isRise?'rgba(0,212,154,.5)':'rgba(255,69,96,.5)';
+    const dCol=b.avgD>=0?'#6ee7b7':'#fca5a5';
+    const wCol=b.avgW>=0?'#6ee7b7':'#fca5a5';
+    const showLabel=bw>50&&bh>28;
+    const showStats=bw>72&&bh>56;
+    const fs=bw>110?'.72':bw>70?'.64':'.56';
     return `<div onclick="fBySec('${b.name}');showBreakoutStocks('${b.name}')"
-      style="position:absolute;left:${b.x.toFixed(1)}px;top:${b.y.toFixed(1)}px;
-             width:${Math.max(b.w-2,2).toFixed(1)}px;height:${Math.max(b.h-2,2).toFixed(1)}px;
-             background:${bg};border:1px solid ${border};
-             border-radius:4px;cursor:pointer;overflow:hidden;
+      style="position:absolute;left:${bx.toFixed(1)}px;top:${by.toFixed(1)}px;
+             width:${bw.toFixed(1)}px;height:${bh.toFixed(1)}px;
+             background:${bg};border:1px solid ${border};border-radius:5px;
+             cursor:pointer;overflow:hidden;box-sizing:border-box;
              display:flex;flex-direction:column;justify-content:center;align-items:center;
-             transition:all .2s;box-sizing:border-box;padding:2px;
-             ${b.breakout?'box-shadow:0 0 0 2px #a855f7,0 0 12px rgba(168,85,247,.4)':''}"
-      title="${b.name}: Day ${b.avgD>=0?'+':''}{${b.avgD.toFixed(1)}%} | Week ${b.avgW>=0?'+':''}{${b.avgW.toFixed(1)}%}">
+             ${b.breakout?'box-shadow:inset 0 0 0 2px #a855f7,0 0 10px rgba(168,85,247,.35);':''}"
+      title="${b.name} | Day:${b.avgD>=0?'+':''}${b.avgD.toFixed(1)}% | Wk:${b.avgW>=0?'+':''}${b.avgW.toFixed(1)}%">
       ${showLabel?`
-        <div style="font-size:${b.w>100?'.68':'0.58'}rem;font-weight:800;color:#fff;
-                    text-shadow:0 1px 3px rgba(0,0,0,.6);text-align:center;line-height:1.2;
-                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">
-          ${showFire}${b.name}
+        <div style="font-size:${fs}rem;font-weight:800;color:#fff;
+                    text-shadow:0 1px 3px rgba(0,0,0,.7);text-align:center;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                    max-width:calc(100% - 4px);line-height:1.2;padding:0 2px">
+          ${b.breakout?'🔥 ':''}${b.name}
         </div>
-        ${showFull?`
-        <div style="font-size:.62rem;color:${wColor};font-weight:700;margin-top:2px">
-          W ${b.avgW>=0?'+':''}{${b.avgW.toFixed(1)}%}
+        ${showStats?`
+        <div style="font-size:.6rem;font-weight:700;color:${wCol};margin-top:3px;line-height:1">
+          W ${b.avgW>=0?'+':''}${b.avgW.toFixed(1)}%
         </div>
-        <div style="font-size:.58rem;color:${dColor};margin-top:1px">
-          D ${b.avgD>=0?'+':''}{${b.avgD.toFixed(1)}%}
+        <div style="font-size:.56rem;color:${dCol};margin-top:1px;line-height:1">
+          D ${b.avgD>=0?'+':''}${b.avgD.toFixed(1)}%
         </div>`:''}
       `:''}
     </div>`;
   }).join('');
 }
+
 
 function isBreakout(s){
   // Sector showing breakout characteristics:
@@ -9633,290 +9655,276 @@ function nfOptRender(d) {
 // Fetches weekly data for NSE sector indices, computes 4-week RS trail
 // ══════════════════════════════════════════════════════════════════════════════
 
-const RRG_SECTORS = [
-  { name:'IT',       sym:'^CNXIT',      color:'#54a0ff' },
-  { name:'Banking',  sym:'^CNXBANK',    color:'#5f27cd' },
-  { name:'Pharma',   sym:'^CNXPHARMA',  color:'#00cec9' },
-  { name:'Auto',     sym:'^CNXAUTO',    color:'#e17055' },
-  { name:'FMCG',     sym:'^CNXFMCG',   color:'#00b894' },
-  { name:'Metals',   sym:'^CNXMETAL',   color:'#b2bec3' },
-  { name:'Energy',   sym:'^CNXENERGY',  color:'#ff9f43' },
-  { name:'Realty',   sym:'^CNXREALTY',  color:'#c0392b' },
-  { name:'Infra',    sym:'^CNXINFRA',   color:'#636e72' },
-  { name:'Finance',  sym:'^CNXFINANCE', color:'#a29bfe' },
-];
-const RRG_NIFTY  = '^NSEI';
-let   RRG_CACHE  = null;
-let   RRG_SEL    = null; // selected sector name
 
-async function fetchRRG() {
+// ── Sector Color map for RRG ──────────────────────────────────────────────────
+const RRG_COLORS = {
+  'IT':'#54a0ff','Banking':'#5f27cd','Finance':'#a29bfe','NBFC':'#fd79a8',
+  'Pharma':'#00cec9','Auto':'#e17055','FMCG':'#00b894','Metals':'#b2bec3',
+  'Energy':'#ff9f43','Realty':'#c0392b','Infra':'#636e72','Chemicals':'#d35400',
+  'Defence':'#e84393','Consumer':'#27ae60','Telecom':'#2980b9','Capgoods':'#8e44ad',
+  'Cement':'#dfe6e9','Jewellery':'#f9ca24','Agri':'#16a085','Beverages':'#6c5ce7',
+};
+let RRG_CACHE  = null;
+let RRG_SEL    = null;
+
+function fetchRRG() {
+  // Use already-loaded stock data in AS — no API calls needed
+  // Compute per-sector weekly returns for last 5 weeks from stock.weekly arrays
+  if (!AS || AS.length < 10) {
+    const el = document.getElementById('rrg-loading');
+    if (el) el.innerHTML = '<span style="color:var(--muted2);font-size:.65rem">⏳ Load stocks first to see RRG</span>';
+    return;
+  }
+
   const loadEl = document.getElementById('rrg-loading');
   const canvas = document.getElementById('rrgC');
   if (!loadEl || !canvas) return;
 
-  if (RRG_CACHE) { drawRRG(RRG_CACHE); return; }
-
-  loadEl.style.display = 'block';
-  canvas.style.display  = 'none';
-
   try {
-    // Fetch Nifty 50 weekly
-    const niftyRaw  = await fetch(`${PROXY_BASE}/api/chart?symbol=${encodeURIComponent(RRG_NIFTY)}`).then(r=>r.json());
-    const niftyWkly = toWeekly(parseYahoo(niftyRaw));
-    if (niftyWkly.length < 6) throw new Error('Not enough Nifty data');
+    // Group stocks by sector, collect last 5 weekly closes per stock
+    const NWEEKS = 5;
+    const secMap = {};
 
-    // Fetch each sector in parallel
-    const results = await Promise.allSettled(
-      RRG_SECTORS.map(sec =>
-        fetch(`${PROXY_BASE}/api/chart?symbol=${encodeURIComponent(sec.sym)}`)
-          .then(r => r.json())
-          .then(raw => ({ ...sec, weekly: toWeekly(parseYahoo(raw)) }))
-      )
-    );
+    AS.forEach(s => {
+      if (!s.weekly || s.weekly.length < NWEEKS + 1) return;
+      const sec = s.sector || 'Others';
+      if (!secMap[sec]) secMap[sec] = [];
+      // Last NWEEKS+1 weekly closes
+      const wkCloses = s.weekly.slice(-(NWEEKS + 1)).map(w => w.c).filter(c => c > 0);
+      if (wkCloses.length >= NWEEKS + 1) secMap[sec].push(wkCloses);
+    });
 
-    const sectors = results
-      .filter(r => r.status === 'fulfilled' && r.value.weekly.length >= 6)
-      .map(r => r.value);
+    // Compute average weekly return for each sector, each of last NWEEKS weeks
+    // wkRet[w] = avg((close[w] - close[w-1]) / close[w-1]) across all stocks in sector
+    const sectorData = [];
+    Object.entries(secMap).forEach(([secName, stockCloses]) => {
+      if (stockCloses.length < 2) return; // need at least 2 stocks
 
-    if (!sectors.length) throw new Error('No sector data loaded');
-
-    // Compute RS ratio + momentum for last 5 weeks (4 trail points + current)
-    const WEEKS = 5;
-    const sectorData = sectors.map(sec => {
-      const trail = [];
-      for (let w = WEEKS; w >= 1; w--) {
-        const secIdx  = sec.weekly.length - w;
-        const nifIdx  = niftyWkly.length - w;
-        if (secIdx < 0 || nifIdx < 0) continue;
-        const rsRatio = niftyWkly[nifIdx].c > 0
-          ? (sec.weekly[secIdx].c / niftyWkly[nifIdx].c) * 100
-          : 100;
-        trail.push(rsRatio);
+      const weekReturns = []; // array of NWEEKS values
+      for (let w = 1; w <= NWEEKS; w++) {
+        const rets = stockCloses
+          .map(closes => {
+            const prev = closes[closes.length - NWEEKS - 1 + w - 1];
+            const curr = closes[closes.length - NWEEKS - 1 + w];
+            return prev > 0 ? (curr - prev) / prev * 100 : null;
+          })
+          .filter(r => r !== null);
+        weekReturns.push(rets.length ? rets.reduce((a,b)=>a+b,0)/rets.length : 0);
       }
-      if (trail.length < 2) return null;
-      // RS Momentum = rate of change of RS Ratio over last 2 periods
-      const rsMom = trail.length >= 2
-        ? ((trail[trail.length-1] - trail[trail.length-2]) / trail[trail.length-2]) * 100
-        : 0;
-      const rsRatio = trail[trail.length-1];
-      // Normalize RS Ratio around 100 (Nifty level)
-      const rsNorm = rsRatio; // We'll normalize in draw
-      return { ...sec, trail, rsRatio, rsMom };
-    }).filter(Boolean);
 
-    RRG_CACHE = { sectors: sectorData, niftyWkly };
+      // RS Ratio = cumulative sector return vs market average over all sectors
+      // We'll normalise after collecting all sectors
+      const cumRet = weekReturns.reduce((a, b) => a + b, 0);
+      const rsMom  = weekReturns.length >= 2
+        ? weekReturns[weekReturns.length - 1] - weekReturns[weekReturns.length - 2]
+        : 0;
+
+      sectorData.push({
+        name:        secName,
+        color:       RRG_COLORS[secName] || '#636e72',
+        weekReturns, // [w0, w1, w2, w3, w4]
+        cumRet,      // total return over NWEEKS
+        rsMom,       // last week improvement
+        stockCount:  stockCloses.length,
+      });
+    });
+
+    if (sectorData.length < 2) {
+      loadEl.innerHTML = '<span style="color:var(--muted2);font-size:.65rem">Not enough sector data yet — wait for stocks to finish loading</span>';
+      return;
+    }
+
+    // Compute RS Ratio per sector relative to median sector performance
+    const allCumRets = sectorData.map(s => s.cumRet);
+    const medRet = allCumRets.sort((a,b)=>a-b)[Math.floor(allCumRets.length/2)];
+
+    // Build trail: RS Ratio for each of last NWEEKS weeks
+    sectorData.forEach(s => {
+      const allMedianAtWeek = []; // we use sector's own cumulative vs market median
+      s.trail = s.weekReturns.map((_, wi) => {
+        // Cumulative sector return up to week wi
+        return s.weekReturns.slice(0, wi + 1).reduce((a,b)=>a+b,0);
+      });
+      s.rsRatio = s.cumRet - medRet; // relative to market median
+      // Already have rsMom
+    });
+
+    RRG_CACHE = { sectors: sectorData };
     drawRRG(RRG_CACHE);
 
   } catch(e) {
-    loadEl.innerHTML = `<span style="color:var(--red)">❌ RRG load failed: ${e.message}</span>`;
+    loadEl.innerHTML = `<span style="color:var(--red);font-size:.65rem">❌ RRG error: ${e.message}</span>`;
     console.error('[RRG]', e);
   }
-}
-
-function parseYahoo(raw) {
-  try {
-    const res = raw.chart?.result?.[0];
-    if (!res) return [];
-    const ts = res.timestamp || [];
-    const q  = res.indicators?.quote?.[0] || {};
-    return ts.map((t,i) => ({
-      t, c: q.close?.[i], h: q.high?.[i], l: q.low?.[i],
-      o: q.open?.[i], v: q.volume?.[i]
-    })).filter(b => b.c && b.c > 0);
-  } catch(e) { return []; }
-}
-
-function toWeekly(bars) {
-  const weeks = {};
-  bars.forEach(b => {
-    const d   = new Date(b.t * 1000);
-    const day = d.getUTCDay();
-    const mon = new Date(d); mon.setUTCDate(d.getUTCDate() - (day === 0 ? 6 : day - 1));
-    const key = mon.toISOString().slice(0, 10);
-    if (!weeks[key]) weeks[key] = { t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v||0, key };
-    else {
-      weeks[key].h = Math.max(weeks[key].h, b.h);
-      weeks[key].l = Math.min(weeks[key].l, b.l);
-      weeks[key].c = b.c;
-      weeks[key].v += b.v || 0;
-    }
-  });
-  return Object.values(weeks).sort((a,b) => a.t - b.t);
 }
 
 function drawRRG(data) {
   const loadEl = document.getElementById('rrg-loading');
   const canvas = document.getElementById('rrgC');
   if (!canvas) return;
-  loadEl.style.display = 'none';
+  if (loadEl) loadEl.style.display = 'none';
   canvas.style.display = 'block';
 
   const { sectors } = data;
-  if (!sectors.length) return;
+  if (!sectors || !sectors.length) return;
 
-  // Canvas sizing
-  const W = canvas.parentElement.offsetWidth - 24 || 300;
-  const H = Math.max(260, Math.round(W * 0.75));
-  canvas.width  = W;
-  canvas.height = H;
+  const W = Math.min(canvas.parentElement.offsetWidth - 4 || 320, 600);
+  const H = Math.max(260, Math.round(W * 0.78));
+  canvas.width  = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
   const ctx = canvas.getContext('2d');
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
-  // Find data range for normalization
-  const allRS  = sectors.flatMap(s => s.trail);
-  const midRS  = allRS.reduce((a,b)=>a+b,0) / allRS.length;
-  const allMom = sectors.map(s => s.rsMom);
-  const maxAbs = Math.max(...allMom.map(Math.abs), 0.5);
-
-  // Map to canvas coords
-  // X: RS Ratio (right = stronger vs Nifty)
-  // Y: RS Momentum (up = improving)
-  const PAD = { t:30, b:30, l:40, r:20 };
+  const PAD = { t:28, b:32, l:36, r:16 };
   const CW  = W - PAD.l - PAD.r;
   const CH  = H - PAD.t - PAD.b;
-  const CX  = W/2, CY = H/2; // center
 
-  function toX(rsRatio) {
-    const norm = (rsRatio - midRS) / (midRS * 0.06 || 1);
-    return PAD.l + CW/2 + norm * (CW/2) * 0.8;
-  }
-  function toY(rsMom) {
-    const norm = rsMom / (maxAbs * 1.2 || 1);
-    return PAD.t + CH/2 - norm * (CH/2) * 0.8;
-  }
+  // Data ranges
+  const rsRatios = sectors.map(s => s.rsRatio);
+  const rsMoms   = sectors.map(s => s.rsMom);
+  const maxRS    = Math.max(...rsRatios.map(Math.abs), 0.5) * 1.3;
+  const maxMom   = Math.max(...rsMoms.map(Math.abs), 0.3) * 1.3;
 
-  // ── Background quadrants ──────────────────────────────────────────────────
-  ctx.fillStyle = 'rgba(0,212,154,0.06)';
-  ctx.fillRect(PAD.l + CW/2, PAD.t, CW/2, CH/2);       // Leading (top-right)
-  ctx.fillStyle = 'rgba(255,69,96,0.06)';
-  ctx.fillRect(PAD.l + CW/2, PAD.t + CH/2, CW/2, CH/2); // Weakening (bot-right)
-  ctx.fillStyle = 'rgba(0,150,255,0.06)';
-  ctx.fillRect(PAD.l, PAD.t + CH/2, CW/2, CH/2);        // Lagging (bot-left)
-  ctx.fillStyle = 'rgba(245,197,24,0.06)';
-  ctx.fillRect(PAD.l, PAD.t, CW/2, CH/2);               // Improving (top-left)
+  function toX(rsRatio) { return PAD.l + (rsRatio / maxRS * 0.5 + 0.5) * CW; }
+  function toY(rsMom)   { return PAD.t + (1 - (rsMom / maxMom * 0.5 + 0.5)) * CH; }
 
-  // ── Axes ──────────────────────────────────────────────────────────────────
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-  ctx.lineWidth   = 1;
-  ctx.setLineDash([4,4]);
-  ctx.beginPath(); ctx.moveTo(PAD.l, H/2); ctx.lineTo(W-PAD.r, H/2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(W/2, PAD.t); ctx.lineTo(W/2, H-PAD.b); ctx.stroke();
-  ctx.setLineDash([]);
+  const CX = toX(0), CY = toY(0);
 
-  // ── Quadrant labels ───────────────────────────────────────────────────────
-  const labels = [
-    { text:'🚀 Leading',   x: W-PAD.r-4,  y: PAD.t+14,  align:'right', col:'rgba(0,212,154,.7)' },
-    { text:'📉 Weakening', x: W-PAD.r-4,  y: H-PAD.b-6, align:'right', col:'rgba(255,69,96,.7)' },
-    { text:'📦 Improving', x: PAD.l+4,    y: PAD.t+14,  align:'left',  col:'rgba(245,197,24,.7)' },
-    { text:'💤 Lagging',   x: PAD.l+4,    y: H-PAD.b-6, align:'left',  col:'rgba(100,150,255,.7)' },
+  // ── Quadrant backgrounds ───────────────────────────────────────────────────
+  const quads = [
+    { x:CX,  y:PAD.t, w:W-PAD.r-CX, h:CY-PAD.t,    fill:'rgba(0,212,154,0.07)',  label:'🚀 Leading',   lx:W-PAD.r-4,  ly:PAD.t+13, align:'right', col:'rgba(0,212,154,.65)' },
+    { x:CX,  y:CY,    w:W-PAD.r-CX, h:H-PAD.b-CY,   fill:'rgba(255,69,96,0.07)', label:'📉 Weakening', lx:W-PAD.r-4,  ly:H-PAD.b-5,align:'right', col:'rgba(255,69,96,.65)' },
+    { x:PAD.l,y:PAD.t,w:CX-PAD.l,   h:CY-PAD.t,     fill:'rgba(245,197,24,0.07)',label:'📦 Improving', lx:PAD.l+4,    ly:PAD.t+13, align:'left',  col:'rgba(245,197,24,.65)'},
+    { x:PAD.l,y:CY,   w:CX-PAD.l,   h:H-PAD.b-CY,   fill:'rgba(80,120,255,0.07)',label:'💤 Lagging',   lx:PAD.l+4,    ly:H-PAD.b-5,align:'left',  col:'rgba(100,150,255,.65)'},
   ];
-  ctx.font = 'bold 9px system-ui';
-  labels.forEach(l => {
-    ctx.fillStyle  = l.col;
-    ctx.textAlign  = l.align;
-    ctx.fillText(l.text, l.x, l.y);
+  quads.forEach(q => {
+    ctx.fillStyle = q.fill;
+    ctx.fillRect(q.x, q.y, q.w, q.h);
   });
 
-  // ── Axis labels ───────────────────────────────────────────────────────────
-  ctx.font      = '8px system-ui';
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  // ── Grid lines ─────────────────────────────────────────────────────────────
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([3, 5]);
+  ctx.beginPath(); ctx.moveTo(CX, PAD.t); ctx.lineTo(CX, H-PAD.b); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(PAD.l, CY); ctx.lineTo(W-PAD.r, CY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // ── Quadrant labels ────────────────────────────────────────────────────────
+  ctx.font = 'bold 8.5px system-ui,sans-serif';
+  quads.forEach(q => {
+    ctx.fillStyle = q.col;
+    ctx.textAlign = q.align;
+    ctx.fillText(q.label, q.lx, q.ly);
+  });
+
+  // ── Axis labels ────────────────────────────────────────────────────────────
+  ctx.font      = '7.5px system-ui,sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
   ctx.textAlign = 'center';
-  ctx.fillText('← Weaker vs Nifty  |  Stronger vs Nifty →', W/2, H-4);
+  ctx.fillText('← Underperforming  |  Outperforming →', W/2, H - 4);
   ctx.save(); ctx.translate(10, H/2);
   ctx.rotate(-Math.PI/2);
-  ctx.fillText('RS Momentum', 0, 0);
+  ctx.fillText('↑ Momentum', 0, 0);
   ctx.restore();
 
-  // ── Draw each sector: trail + dot ─────────────────────────────────────────
+  // ── Draw each sector: 4-week trail + current dot ───────────────────────────
   sectors.forEach(sec => {
-    const trail = sec.trail;
-    if (trail.length < 2) return;
+    if (!sec.trail || sec.trail.length < 2) return;
+    const NWEEKS = sec.trail.length;
 
-    // Trail points (last 4 weeks before current)
-    const pts = trail.map((rs, i) => {
-      // For momentum at each trail point, use diff with prev
-      const mom = i > 0
-        ? ((rs - trail[i-1]) / trail[i-1]) * 100
-        : sec.rsMom;
-      return { x: toX(rs), y: toY(mom) };
-    });
+    // Trail momentum at each week = week-over-week change in cum return
+    const trailPts = sec.trail.map((cumR, i) => ({
+      x: toX(cumR - (sectors.reduce((a,b)=>a+b.trail[i],0)/sectors.length)), // vs market avg
+      y: toY(i > 0 ? sec.trail[i] - sec.trail[i-1] : 0),
+    }));
+    // Current point
+    const cur = { x: toX(sec.rsRatio), y: toY(sec.rsMom) };
+    const allPts = [...trailPts, cur];
 
-    // Draw trail (fading)
-    for (let i = 1; i < pts.length; i++) {
-      const alpha = 0.15 + (i / pts.length) * 0.5;
-      ctx.strokeStyle = sec.color + Math.round(alpha * 255).toString(16).padStart(2,'0');
-      ctx.lineWidth   = 1.5;
+    // Draw trail
+    for (let i = 1; i < allPts.length; i++) {
+      const alpha = 0.12 + (i / allPts.length) * 0.55;
+      ctx.strokeStyle = sec.color + Math.round(alpha*255).toString(16).padStart(2,'0');
+      ctx.lineWidth   = i === allPts.length - 1 ? 2 : 1.5;
       ctx.beginPath();
-      ctx.moveTo(pts[i-1].x, pts[i-1].y);
-      ctx.lineTo(pts[i].x,   pts[i].y);
+      ctx.moveTo(allPts[i-1].x, allPts[i-1].y);
+      ctx.lineTo(allPts[i].x,   allPts[i].y);
       ctx.stroke();
       // Small trail dot
-      if (i < pts.length - 1) {
-        ctx.fillStyle = sec.color + '66';
+      if (i < allPts.length - 1) {
+        ctx.fillStyle = sec.color + '55';
         ctx.beginPath();
-        ctx.arc(pts[i].x, pts[i].y, 2.5, 0, Math.PI*2);
+        ctx.arc(allPts[i].x, allPts[i].y, 2, 0, Math.PI*2);
         ctx.fill();
       }
     }
 
-    // Current position dot
-    const cur  = pts[pts.length - 1];
-    const isBk = sec.rsMom > 0 && sec.rsRatio > midRS; // Leading quadrant
-    const r    = isBk ? 8 : 6;
+    // Arrowhead on trail
+    const prev = allPts[allPts.length - 2];
+    const angle = Math.atan2(cur.y - prev.y, cur.x - prev.x);
     ctx.fillStyle   = sec.color;
-    ctx.strokeStyle = isBk ? '#a855f7' : 'rgba(255,255,255,0.3)';
-    ctx.lineWidth   = isBk ? 2.5 : 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth   = 1;
+    ctx.save();
+    ctx.translate(cur.x, cur.y);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(5, 0); ctx.lineTo(-3, -3); ctx.lineTo(-3, 3);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    // Main dot
+    const inLeading = sec.rsRatio > 0 && sec.rsMom > 0;
+    const r = inLeading ? 8 : 6;
+    ctx.fillStyle   = sec.color;
+    ctx.strokeStyle = inLeading ? '#c084fc' : 'rgba(255,255,255,0.25)';
+    ctx.lineWidth   = inLeading ? 2.5 : 1;
     ctx.beginPath();
     ctx.arc(cur.x, cur.y, r, 0, Math.PI*2);
     ctx.fill();
     ctx.stroke();
 
-    // Breakout fire badge
-    if (isBk) {
+    // Breakout fire
+    if (inLeading) {
       ctx.font      = '10px system-ui';
       ctx.textAlign = 'center';
       ctx.fillText('🔥', cur.x, cur.y - r - 2);
     }
 
-    // Label
-    ctx.font      = `${isBk?'bold ':''}9px system-ui`;
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    const lx = cur.x;
-    const ly = cur.y + r + 10;
-    // Background pill for readability
+    // Label pill
+    ctx.font = `${inLeading?'bold ':''}8.5px system-ui,sans-serif`;
     const tw = ctx.measureText(sec.name).width;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    const lx = Math.max(PAD.l + tw/2 + 2, Math.min(W - PAD.r - tw/2 - 2, cur.x));
+    const ly = cur.y + r + 11;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.beginPath();
-    ctx.roundRect?.(lx - tw/2 - 3, ly - 9, tw + 6, 12, 3);
+    if (ctx.roundRect) ctx.roundRect(lx - tw/2 - 3, ly - 9, tw + 6, 11, 3);
+    else ctx.rect(lx - tw/2 - 3, ly - 9, tw + 6, 11);
     ctx.fill();
     ctx.fillStyle = sec.color;
+    ctx.textAlign = 'center';
     ctx.fillText(sec.name, lx, ly);
   });
 
-  // ── Click handler for sector dot ──────────────────────────────────────────
+  // ── Click handler ──────────────────────────────────────────────────────────
   canvas.onclick = (e) => {
     const rect = canvas.getBoundingClientRect();
-    const mx   = e.clientX - rect.left;
-    const my   = e.clientY - rect.top;
-    let closest = null, minD = 20;
+    const scaleX = canvas.width  / rect.width  / window.devicePixelRatio;
+    const scaleY = canvas.height / rect.height / window.devicePixelRatio;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top)  * scaleY;
+    let closest = null, minD = 24;
     sectors.forEach(sec => {
-      const trail = sec.trail;
-      const cur   = { x: toX(trail[trail.length-1]),
-                      y: toY(sec.rsMom) };
-      const d = Math.hypot(mx - cur.x, my - cur.y);
+      const d = Math.hypot(mx - toX(sec.rsRatio), my - toY(sec.rsMom));
       if (d < minD) { minD = d; closest = sec; }
     });
     if (closest) {
       RRG_SEL = closest.name;
-      // Map RRG sector name to screener sector names
-      const secMap = {
-        'IT':'IT','Banking':'Banking','Pharma':'Pharma','Auto':'Auto',
-        'FMCG':'FMCG','Metals':'Metals','Energy':'Energy',
-        'Realty':'Realty','Infra':'Infra','Finance':'Finance',
-      };
-      const screenSec = secMap[closest.name] || closest.name;
-      showBreakoutStocks(screenSec);
-      fBySec(screenSec);
+      showBreakoutStocks(closest.name);
+      fBySec(closest.name);
     }
   };
 }
