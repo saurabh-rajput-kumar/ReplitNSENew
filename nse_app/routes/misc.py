@@ -358,3 +358,153 @@ def option_chain():
     except Exception as e:
         print(f"[OptionChain] {e}")
         return jsonify({"error": f"Parse error: {str(e)[:120]}"}), 500
+
+
+# ── NSE Universe Batch Quote (Phase 3 data source) ────────────────────────────
+# Returns price proximity to 52w high + volume ratio for ~400 extra NSE symbols
+# Frontend uses this to identify breakout candidates for weekly data fetch
+
+NSE_EXTRA_SYMS = [
+    "ADANIGREEN","ADANIPORTS","ADANIENT","ADANITRANS","ADANIPOWER",
+    "MOTHERSON","CUMMINSIND","ESCORTS","FINEORG","GALAXYSURF",
+    "GODREJCP","GODREJIND","GODREJPROP","HAVELLS","HINDPETRO",
+    "HINDCOPPER","HINDZINC","IDFCFIRSTB","INDIANB","INDHOTEL",
+    "IRB","IRCON","IRCTC","IRFC","JSWSTEEL","JSWENERGY","JSPL",
+    "KPITTECH","KPRMILL","KAJARIACER","LALPATHLAB","LINDEINDIA",
+    "LTIM","LTTS","MARICO","MFSL","NBCC","NCC","NHPC","NLCINDIA",
+    "NMDC","OFSS","OIL","ONGC","PAGEIND","PIIND","POLYCAB",
+    "POWERGRID","RAJESHEXPO","RECLTD","RITES","RVNL","SAIL",
+    "SCHAEFFLER","SHREECEM","SIEMENS","SKFINDIA","SRF","STARHEALTH",
+    "SUMICHEM","SUNDARMFIN","SUNPHARMA","SUPREMEIND","TATACHEM",
+    "TATACOMM","TATACONSUM","TATAELXSI","TATAPOWER","TATATECH",
+    "TECHNM","TIINDIA","TIMKEN","TORNTPHARM","TORNTPOWER","TRENT",
+    "TRIDENT","ULTRACEMCO","UNIONBANK","UPL","VGUARD","VINATIORGA",
+    "VOLTAS","WIPRO","ASTRAL","APLAPOLLO","APOLLOHOSP","APLLTD",
+    "ABCAPITAL","ABFRL","ACC","ALKEM","ALKYLAMINE","AMBUJACEMENT",
+    "ANGELONE","APCOTEXIND","APTUS","ASAHIINDIA","ASHOKLEY",
+    "ASTERDM","ATUL","AUBANK","AUROPHARMA","AVANTIFEED","BAJFINANCE",
+    "BAJAJFINSV","BANKINDIA","BASF","BATAINDIA","BEL","BEML",
+    "BERGEPAINT","BIOCON","BPCL","BRIGADE","BSE","BSOFT","CANBK",
+    "CANFINHOME","CASTROLIND","CDSL","CEATLTD","CENTURYPLY",
+    "CENTURYTEX","CESC","CGPOWER","CHAMBLFERT","CHEMPLASTS",
+    "CHOLAFIN","COALINDIA","COFORGE","COLPAL","CONCOR","COROMANDEL",
+    "CROMPTON","DABUR","DCMSHRIRAM","DEEPAKFERT","DELHIVERY",
+    "DEVYANI","DIXON","DLF","DLABSEQ","DRREDDY","DELTACORP",
+    "EDELWEISS","ELGIEQUIP","EMAMILTD","ENGINERSIN","ERIS","ESABINDIA",
+    "FACT","FEDERALBNK","FLUOROCHEM","FDC","FCSSOFT","GAIL",
+    "GHCL","GILLETTE","GLAND","GLAXO","GLENMARK","GMRINFRA",
+    "GNFC","GODFRYPHLP","GRANULES","GRAPHITE","GRASIM","GREENPANEL",
+    "GRINDWELL","GRINFRA","HAPPSTMNDS","HATSUN","HDFCAMC","HDFCLIFE",
+    "HEROMOTOCO","HIKAL","HIMADRI","HONASA","HONAUT","HUDCO",
+    "ICICIBANK","ICICIGI","ICICIPRU","IEX","IFBIND","IIFL",
+    "IMFA","INDIAMART","INDIACEM","INTELLECT","IPCALAB","ITC",
+    "JAMNAAUTO","JBCHEPHARM","JKCEMENT","JKLAKSHMI","JKPAPER",
+    "JKTYRE","JMFINANCIL","JUBLFOOD","JUSTDIAL","KALYANKJIL",
+    "KANSAINER","KAYNES","KIRLOSBROS","KIRLOSKAR","KOLTEPATIL",
+    "KOTAKBANK","KPIGREEN","LICHSGFIN","LODHA","LUPIN","LUXIND",
+    "MAHLOG","MANKIND","MANNAPURAM","MAPMYINDIA","MAXHEALTH","MCX",
+    "MGL","MIDHANI","MPHASIS","MRF","MUTHOOTFIN","NATCOPHARM",
+    "NAUKRI","NESTLEIND","NETWORK18","NEWGEN","NTPC","OBEROIRLTY",
+    "ORIENTELEC","PATELENG","PERSISTENT","PETRONET","PFIZER",
+    "PHOENIXLTD","PIDILITIND","PRESTIGE","PSPPROJECT","PTC",
+    "PVRINOX","RADICO","RAILTEL","RATNAMANI","RAYMOND","REDINGTON",
+    "RELAXO","ROSSARI","ROUTE","SANOFI","SAPPHIRE","SBICARD",
+    "SBILIFE","SEQUENT","SHARDACROP","SHILPAMED","SHOPERSTOP",
+    "SHRIRAMFIN","SJVN","SOLARA","SONACOMS","SONATSOFTW","SPARC",
+    "SPENCEERS","STLTECH","SUBROS","SUDARSCHEM","SUNDRMFAST",
+    "SURYAROSNI","SYMPHONY","SYNGENE","TANLA","TATACOFFEE",
+    "TCIEXP","THERMAX","THYROCARE","TITAGARH","TVSMOTORS",
+    "TVSHLTD","UNICHEMLAB","USHAMART","VAIBHAVGBL","VBL","VEDL",
+    "VESTUVIUS","VIPIND","VSTIND","VSTILLERS","WELCORP","WELSPUNIND",
+    "WESTLIFE","WHIRLPOOL","WINDLAS","YESBANK","ZYDUSLIFE",
+    "CRAFTSMAN","DIXONTECH","KAYNES","DLABSEQ","LATENTVIEW",
+    "MEDANTA","NUVAMA","PAYTM","POONAWALLA","RATEGAIN","SBFC",
+    "SOLARINDS","TARSONS","UTIAMC","VERANDA","XPRO",
+]
+
+@bp.route("/api/nse-universe")
+def nse_universe():
+    """
+    Batch-fetch price/52wHigh/volume for NSE extra universe via Yahoo Finance.
+    Returns only breakout candidates (near 52w high OR high volume).
+    Frontend uses this for Phase 3 loading.
+    """
+    import time as _time
+
+    UA_HDR = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/122.0.0.0 Safari/537.36"),
+        "Accept": "application/json",
+    }
+
+    # Filter out symbols already in the screener universe
+    existing_raw = freq.args.get("existing", "")
+    existing     = set(existing_raw.split(",")) if existing_raw else set()
+    to_fetch     = [s for s in NSE_EXTRA_SYMS if s not in existing]
+
+    candidates = []
+    batch_size = 50
+
+    for i in range(0, len(to_fetch), batch_size):
+        batch   = to_fetch[i:i + batch_size]
+        symbols = ",".join(s + ".NS" for s in batch)
+        for base in ["https://query1.finance.yahoo.com",
+                     "https://query2.finance.yahoo.com"]:
+            try:
+                r = requests.get(
+                    f"{base}/v7/finance/quote",
+                    params={
+                        "symbols": symbols,
+                        "fields":  "symbol,regularMarketPrice,"
+                                   "fiftyTwoWeekHigh,fiftyTwoWeekLow,"
+                                   "regularMarketVolume,averageDailyVolume10Day,"
+                                   "regularMarketChangePercent,shortName",
+                    },
+                    headers=UA_HDR,
+                    timeout=15,
+                )
+                if not r.ok:
+                    continue
+                quotes = (r.json()
+                          .get("quoteResponse", {})
+                          .get("result", []))
+                for q in quotes:
+                    price    = q.get("regularMarketPrice", 0)
+                    hi52     = q.get("fiftyTwoWeekHigh",   0)
+                    lo52     = q.get("fiftyTwoWeekLow",    0)
+                    vol      = q.get("regularMarketVolume",        0)
+                    avg_vol  = q.get("averageDailyVolume10Day",    1) or 1
+                    pct      = q.get("regularMarketChangePercent", 0)
+                    sym_raw  = q.get("symbol", "").replace(".NS", "")
+                    name     = q.get("shortName", sym_raw)
+                    if not price or not hi52:
+                        continue
+                    near_high   = hi52 > 0 and (price / hi52) >= 0.92  # within 8% of 52w high
+                    vol_surge   = vol > avg_vol * 1.8
+                    range_pct   = (hi52 - lo52) / lo52 * 100 if lo52 > 0 else 0
+                    if near_high or vol_surge:
+                        candidates.append({
+                            "symbol":    sym_raw,
+                            "name":      name,
+                            "price":     round(price, 2),
+                            "hi52":      round(hi52,  2),
+                            "lo52":      round(lo52,  2),
+                            "nearHiPct": round(price / hi52 * 100, 1) if hi52 else 0,
+                            "volRatio":  round(vol / avg_vol, 2),
+                            "pct":       round(pct, 2),
+                            "rangePct":  round(range_pct, 1),
+                        })
+                break  # success, don't try second base
+            except Exception as e:
+                print(f"[Universe] batch {i}: {e}")
+                continue
+        _time.sleep(0.1)  # be polite to Yahoo
+
+    # Sort by proximity to 52w high
+    candidates.sort(key=lambda x: -x["nearHiPct"])
+    return jsonify({
+        "total_fetched": len(to_fetch),
+        "candidates":    candidates[:200],  # top 200 breakout candidates
+        "count":         len(candidates),
+    })
