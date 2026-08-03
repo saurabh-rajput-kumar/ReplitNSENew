@@ -2379,9 +2379,173 @@ function gt(t){CT=t;document.querySelectorAll('.ntab').forEach(e=>e.classList.re
 
 function getSD(){const m={};AS.forEach(s=>{const sec=s.sector||'Others';if(!m[sec])m[sec]={n:0,d:0,w:0};m[sec].n++;m[sec].d+=s.pctChange;m[sec].w+=s.weekChg||0;});return Object.entries(m).map(([name,d])=>{const avgD=d.d/d.n,avgW=d.w/d.n;const state=avgW>1.5?'Momentum':avgW<-1.5?'Selling':Math.abs(avgW)<0.5?'Ranging':'Recovering';return{name,avgD,avgW,state};}).sort((a,b)=>b.avgW-a.avgW);}
 
-function buildSC(data,filter='all'){const fd=filter==='all'?data:data.filter(s=>s.state===filter);if(SCH){SCH.destroy();SCH=null;}const c=document.getElementById('secC');if(!c)return;SCH=new Chart(c.getContext('2d'),{type:'bar',data:{labels:fd.map(s=>s.name),datasets:[{label:'Day%',data:fd.map(s=>+s.avgD.toFixed(2)),backgroundColor:fd.map(s=>s.avgD>=0?'rgba(0,200,150,.7)':'rgba(255,79,106,.7)'),borderRadius:3,order:1},{label:'Week%',data:fd.map(s=>+s.avgW.toFixed(2)),type:'line',borderColor:'#f5c518',backgroundColor:'rgba(245,197,24,.08)',borderWidth:2,pointRadius:3,tension:.3,fill:true,order:0,yAxisID:'y1'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#e0e0e0',font:{size:9}}}},scales:{x:{ticks:{color:'#7a7f9a',font:{size:8}},grid:{color:'#1e2340'}},y:{ticks:{color:'#7a7f9a',font:{size:8},callback:v=>v+'%'},grid:{color:'#1e2340'}},y1:{position:'right',ticks:{color:'#f5c518',font:{size:8},callback:v=>v+'%'},grid:{display:false}}}}});}
+function buildSC(data,filter='all'){
+  // Legacy filter still used by fSS — just rebuild treemap
+  buildTreemap(data);
+}
 
-function fSS(st,el){document.querySelectorAll('.sst').forEach(t=>t.classList.remove('active'));el.classList.add('active');buildSC(getSD(),st);}
+// ── Squarified Treemap ────────────────────────────────────────────────────────
+function buildTreemap(data){
+  const el=document.getElementById('sec-treemap');
+  if(!el||!data||!data.length)return;
+  const W=el.offsetWidth||300;
+
+  // Box area proportional to absolute weekly move (min 1%)
+  const vals=data.map(s=>Math.max(Math.abs(s.avgW),0.5));
+  const total=vals.reduce((a,b)=>a+b,0);
+  const TOTAL_H=Math.max(180,Math.round(W*0.55)); // responsive height
+
+  // Squarify algorithm
+  function squarify(items,x,y,w,h,out){
+    if(!items.length)return;
+    if(items.length===1){out.push({...items[0],x,y,w,h});return;}
+    // Split into two groups by area
+    const totA=items.reduce((a,b)=>a+b.area,0);
+    let half=0,best=Infinity,split=0;
+    for(let i=0;i<items.length;i++){
+      half+=items[i].area;
+      const ratio=half/(totA-half);
+      const score=Math.abs(ratio-1);
+      if(score<best){best=score;split=i+1;}
+    }
+    const g1=items.slice(0,split),g2=items.slice(split);
+    const a1=g1.reduce((a,b)=>a+b.area,0)/totA;
+    if(w>=h){
+      const w1=w*a1;
+      layoutRow(g1,x,y,w1,h,out);
+      squarify(g2,x+w1,y,w-w1,h,out);
+    }else{
+      const h1=h*a1;
+      layoutRow(g1,x,y,w,h1,out);
+      squarify(g2,x,y+h1,w,h-h1,out);
+    }
+  }
+
+  function layoutRow(items,x,y,w,h,out){
+    const tot=items.reduce((a,b)=>a+b.area,0);
+    let cx=x,cy=y;
+    items.forEach(item=>{
+      const frac=item.area/tot;
+      if(w>=h){
+        const iw=w,ih=h*frac;
+        out.push({...item,x:cx,y:cy,w:iw,h:ih});
+        cy+=ih;
+      }else{
+        const iw=w*frac,ih=h;
+        out.push({...item,x:cx,y:cy,w:iw,h:ih});
+        cx+=iw;
+      }
+    });
+  }
+
+  // Prepare items with areas
+  const items=data.map((s,i)=>({
+    ...s,
+    area:(vals[i]/total)*W*TOTAL_H,
+    breakout:isBreakout(s),
+  })).sort((a,b)=>b.area-a.area);
+
+  const boxes=[];
+  squarify(items,0,0,W,TOTAL_H,boxes);
+
+  // Render
+  el.style.height=TOTAL_H+'px';
+  el.style.position='relative';
+  el.innerHTML=boxes.map(b=>{
+    const col=SC[b.name]||'#636e72';
+    const isRise=b.avgW>=0;
+    const intensity=Math.min(Math.abs(b.avgW)/5,1); // 5% = full intensity
+    const dColor=b.avgD>=0?'var(--green)':'var(--red)';
+    const wColor=b.avgW>=0?'var(--green)':'var(--red)';
+    const bg=isRise
+      ?`rgba(0,212,154,${0.12+intensity*0.35})`
+      :`rgba(255,69,96,${0.12+intensity*0.35})`;
+    const border=isRise?'rgba(0,212,154,.4)':'rgba(255,69,96,.4)';
+    const showFire=b.breakout?'🔥 ':isRise?'▲ ':'▼ ';
+    // Only show text if box is big enough
+    const showLabel=b.w>55&&b.h>30;
+    const showFull =b.w>80&&b.h>52;
+    return `<div onclick="fBySec('${b.name}');showBreakoutStocks('${b.name}')"
+      style="position:absolute;left:${b.x.toFixed(1)}px;top:${b.y.toFixed(1)}px;
+             width:${Math.max(b.w-2,2).toFixed(1)}px;height:${Math.max(b.h-2,2).toFixed(1)}px;
+             background:${bg};border:1px solid ${border};
+             border-radius:4px;cursor:pointer;overflow:hidden;
+             display:flex;flex-direction:column;justify-content:center;align-items:center;
+             transition:all .2s;box-sizing:border-box;padding:2px;
+             ${b.breakout?'box-shadow:0 0 0 2px #a855f7,0 0 12px rgba(168,85,247,.4)':''}"
+      title="${b.name}: Day ${b.avgD>=0?'+':''}{${b.avgD.toFixed(1)}%} | Week ${b.avgW>=0?'+':''}{${b.avgW.toFixed(1)}%}">
+      ${showLabel?`
+        <div style="font-size:${b.w>100?'.68':'0.58'}rem;font-weight:800;color:#fff;
+                    text-shadow:0 1px 3px rgba(0,0,0,.6);text-align:center;line-height:1.2;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">
+          ${showFire}${b.name}
+        </div>
+        ${showFull?`
+        <div style="font-size:.62rem;color:${wColor};font-weight:700;margin-top:2px">
+          W ${b.avgW>=0?'+':''}{${b.avgW.toFixed(1)}%}
+        </div>
+        <div style="font-size:.58rem;color:${dColor};margin-top:1px">
+          D ${b.avgD>=0?'+':''}{${b.avgD.toFixed(1)}%}
+        </div>`:''}
+      `:''}
+    </div>`;
+  }).join('');
+}
+
+function isBreakout(s){
+  // Sector showing breakout characteristics:
+  // RS improving + weekly momentum accelerating + positive
+  return s.avgW>2.0&&s.avgD>0.5;
+}
+
+function showBreakoutStocks(secName){
+  const bd=document.getElementById('rrg-breakdown');
+  if(!bd)return;
+  const stocks=AS.filter(s=>s.sector===secName)
+    .sort((a,b)=>{
+      // Score by: RSI momentum, price vs EMA, volume ratio, weekly chg
+      const scoreA=(a.weekChg||0)*2+(a.pctChange||0)+(a.volRatio||1)*0.5+(a.rsi>50&&a.rsi<72?5:0)+(a.e20&&a.price>a.e20?3:0);
+      const scoreB=(b.weekChg||0)*2+(b.pctChange||0)+(b.volRatio||1)*0.5+(b.rsi>50&&b.rsi<72?5:0)+(b.e20&&b.price>b.e20?3:0);
+      return scoreB-scoreA;
+    }).slice(0,3);
+  if(!stocks.length){bd.innerHTML='';return;}
+  const isBreakoutSec=isBreakout({avgW:stocks[0]?.weekChg||0,avgD:stocks[0]?.pctChange||0});
+  bd.innerHTML=`
+    <div style="margin-top:8px;padding:10px;background:var(--card2);border:1px solid var(--border2);border-radius:10px">
+      <div style="font-size:.68rem;font-weight:800;color:var(--text);margin-bottom:8px">
+        ${isBreakoutSec?'🔥':''}  Top ${secName} Swing Candidates
+      </div>
+      ${stocks.map(s=>`
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div style="flex:1">
+            <div style="font-size:.72rem;font-weight:800;color:var(--text)">${s.symbol}</div>
+            <div style="font-size:.6rem;color:var(--muted2)">${s.name||''}</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:.67rem;font-weight:700;color:${(s.pctChange||0)>=0?'var(--green)':'var(--red)'}">${(s.pctChange||0)>=0?'+':''}{${(s.pctChange||0).toFixed(2)}%}</div>
+            <div style="font-size:.55rem;color:var(--muted2)">Day</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:.67rem;font-weight:700;color:${(s.weekChg||0)>=0?'var(--green)':'var(--red)'}">${(s.weekChg||0)>=0?'+':''}{${(s.weekChg||0).toFixed(2)}%}</div>
+            <div style="font-size:.55rem;color:var(--muted2)">Week</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:.67rem;font-weight:700;color:var(--text)">${s.rsi?s.rsi.toFixed(0):'–'}</div>
+            <div style="font-size:.55rem;color:var(--muted2)">RSI</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:.67rem;font-weight:700;color:${(s.volRatio||1)>=1.3?'var(--green)':'var(--muted2)'}">${(s.volRatio||1).toFixed(1)}x</div>
+            <div style="font-size:.55rem;color:var(--muted2)">Vol</div>
+          </div>
+          <button onclick="event.stopPropagation();togWL('${s.symbol}')"
+            style="background:var(--card);border:1px solid var(--border2);cursor:pointer;font-size:.7rem;padding:3px 7px;border-radius:6px">
+            ${WL.includes(s.symbol)?'⭐':'☆'}
+          </button>
+        </div>`).join('')}
+    </div>`;
+}
+
+function fSS(st,el){document.querySelectorAll('.sst').forEach(t=>t.classList.remove('active'));el.classList.add('active');const sd=getSD();const fd=st==='all'?sd:sd.filter(s=>s.state===st);buildTreemap(fd);}
 function fBySec(sec){document.getElementById('secf').value=sec;rs();window.scrollTo({top:300,behavior:'smooth'});}
 
 function rs(){
@@ -2434,19 +2598,29 @@ function rs(){
     <div class="pill"><strong>${stocks.length}</strong>Showing</div>
   </div>`;
   html+=`<div class="sh">📊 Sector Heatmap <div class="sh-line"></div></div>
-  <div class="cwrap"><div class="sstabs">
-    <span class="sst active" onclick="fSS('all',this)">All</span>
-    <span class="sst" onclick="fSS('Momentum',this)">🚀 Momentum</span>
-    <span class="sst" onclick="fSS('Recovering',this)">🔄 Recovering</span>
-    <span class="sst" onclick="fSS('Ranging',this)">↔️ Ranging</span>
-    <span class="sst" onclick="fSS('Selling',this)">🔻 Selling</span>
-  </div><div style="height:220px;position:relative"><canvas id="secC"></canvas></div>
-  <div class="spills">${sd.map(s=>{const c=SC[s.name]||'#636e72';return`<span style="background:${c}18;color:${c};border:1px solid ${c}35;font-size:.67rem;padding:3px 9px;border-radius:20px;cursor:pointer;font-weight:600;transition:all .15s" onclick="fBySec('${s.name}')">${s.name} ${s.avgW>0?'▲':'▼'}${Math.abs(s.avgW).toFixed(1)}%</span>`;}).join('')}</div></div>`;
+  <div style="background:var(--card);border:1px solid var(--border2);border-radius:12px;padding:12px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+      <div style="font-size:.76rem;font-weight:800;color:var(--text)">📊 Sector Treemap <span style="font-size:.62rem;color:var(--muted2);font-weight:400">· size = weekly move</span></div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        <span style="font-size:.58rem;background:rgba(0,212,154,.15);color:var(--green);border:1px solid rgba(0,212,154,.3);padding:2px 8px;border-radius:20px">▲ Rising</span>
+        <span style="font-size:.58rem;background:rgba(255,69,96,.15);color:var(--red);border:1px solid rgba(255,69,96,.3);padding:2px 8px;border-radius:20px">▼ Falling</span>
+        <span style="font-size:.58rem;background:rgba(168,85,247,.15);color:#a855f7;border:1px solid rgba(168,85,247,.3);padding:2px 8px;border-radius:20px">🔥 Breakout</span>
+      </div>
+    </div>
+    <div id="sec-treemap" style="width:100%;border-radius:8px;overflow:hidden"></div>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--border2);border-radius:12px;padding:12px;margin-bottom:14px">
+    <div style="font-size:.76rem;font-weight:800;color:var(--text);margin-bottom:4px">🔄 Sector Rotation Graph <span style="font-size:.62rem;color:var(--muted2);font-weight:400">· RRG · 4-week trail</span></div>
+    <div style="font-size:.62rem;color:var(--muted2);margin-bottom:8px">RS Ratio vs Nifty 50 · tap a sector for top breakout stocks</div>
+    <div id="rrg-loading" style="font-size:.65rem;color:var(--muted2);text-align:center;padding:8px">⏳ Loading sector index data…</div>
+    <canvas id="rrgC" style="display:none;width:100%;border-radius:8px"></canvas>
+    <div id="rrg-breakdown" style="margin-top:10px"></div>
+  </div>`;
   html+=`<div class="sh">📋 Stock Cards <div class="sh-line"></div> <span style="font-size:.71rem;color:var(--muted2);font-weight:400">${stocks.length} results</span></div>`;
   if(!stocks.length)html+=`<div class="empty">No stocks match the current filters.<br><span style="font-size:.72rem">Try adjusting the score filter or sector.</span></div>`;
   else html+=`<div class="grid">${stocks.map(s=>cHTML(s)).join('')}</div>`;
   document.getElementById('area').innerHTML=html;
-  setTimeout(()=>{buildSC(sd);stocks.forEach(s=>dSp(s));},50);
+  setTimeout(()=>{buildSC(sd);stocks.forEach(s=>dSp(s));fetchRRG();},50);
 }
 
 function cHTML(s){
@@ -9450,6 +9624,301 @@ function nfOptRender(d) {
       <div style="font-size:.64rem;font-weight:700;color:#a855f7;margin-bottom:5px">💡 What this means</div>
       <div style="font-size:.67rem;color:var(--muted2);line-height:1.8">${signalDetail}</div>
     </div>`;
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTOR ROTATION GRAPH (RRG) — RS Ratio vs RS Momentum vs Nifty 50
+// Fetches weekly data for NSE sector indices, computes 4-week RS trail
+// ══════════════════════════════════════════════════════════════════════════════
+
+const RRG_SECTORS = [
+  { name:'IT',       sym:'^CNXIT',      color:'#54a0ff' },
+  { name:'Banking',  sym:'^CNXBANK',    color:'#5f27cd' },
+  { name:'Pharma',   sym:'^CNXPHARMA',  color:'#00cec9' },
+  { name:'Auto',     sym:'^CNXAUTO',    color:'#e17055' },
+  { name:'FMCG',     sym:'^CNXFMCG',   color:'#00b894' },
+  { name:'Metals',   sym:'^CNXMETAL',   color:'#b2bec3' },
+  { name:'Energy',   sym:'^CNXENERGY',  color:'#ff9f43' },
+  { name:'Realty',   sym:'^CNXREALTY',  color:'#c0392b' },
+  { name:'Infra',    sym:'^CNXINFRA',   color:'#636e72' },
+  { name:'Finance',  sym:'^CNXFINANCE', color:'#a29bfe' },
+];
+const RRG_NIFTY  = '^NSEI';
+let   RRG_CACHE  = null;
+let   RRG_SEL    = null; // selected sector name
+
+async function fetchRRG() {
+  const loadEl = document.getElementById('rrg-loading');
+  const canvas = document.getElementById('rrgC');
+  if (!loadEl || !canvas) return;
+
+  if (RRG_CACHE) { drawRRG(RRG_CACHE); return; }
+
+  loadEl.style.display = 'block';
+  canvas.style.display  = 'none';
+
+  try {
+    // Fetch Nifty 50 weekly
+    const niftyRaw  = await fetch(`${PROXY_BASE}/api/chart?symbol=${encodeURIComponent(RRG_NIFTY)}`).then(r=>r.json());
+    const niftyWkly = toWeekly(parseYahoo(niftyRaw));
+    if (niftyWkly.length < 6) throw new Error('Not enough Nifty data');
+
+    // Fetch each sector in parallel
+    const results = await Promise.allSettled(
+      RRG_SECTORS.map(sec =>
+        fetch(`${PROXY_BASE}/api/chart?symbol=${encodeURIComponent(sec.sym)}`)
+          .then(r => r.json())
+          .then(raw => ({ ...sec, weekly: toWeekly(parseYahoo(raw)) }))
+      )
+    );
+
+    const sectors = results
+      .filter(r => r.status === 'fulfilled' && r.value.weekly.length >= 6)
+      .map(r => r.value);
+
+    if (!sectors.length) throw new Error('No sector data loaded');
+
+    // Compute RS ratio + momentum for last 5 weeks (4 trail points + current)
+    const WEEKS = 5;
+    const sectorData = sectors.map(sec => {
+      const trail = [];
+      for (let w = WEEKS; w >= 1; w--) {
+        const secIdx  = sec.weekly.length - w;
+        const nifIdx  = niftyWkly.length - w;
+        if (secIdx < 0 || nifIdx < 0) continue;
+        const rsRatio = niftyWkly[nifIdx].c > 0
+          ? (sec.weekly[secIdx].c / niftyWkly[nifIdx].c) * 100
+          : 100;
+        trail.push(rsRatio);
+      }
+      if (trail.length < 2) return null;
+      // RS Momentum = rate of change of RS Ratio over last 2 periods
+      const rsMom = trail.length >= 2
+        ? ((trail[trail.length-1] - trail[trail.length-2]) / trail[trail.length-2]) * 100
+        : 0;
+      const rsRatio = trail[trail.length-1];
+      // Normalize RS Ratio around 100 (Nifty level)
+      const rsNorm = rsRatio; // We'll normalize in draw
+      return { ...sec, trail, rsRatio, rsMom };
+    }).filter(Boolean);
+
+    RRG_CACHE = { sectors: sectorData, niftyWkly };
+    drawRRG(RRG_CACHE);
+
+  } catch(e) {
+    loadEl.innerHTML = `<span style="color:var(--red)">❌ RRG load failed: ${e.message}</span>`;
+    console.error('[RRG]', e);
+  }
+}
+
+function parseYahoo(raw) {
+  try {
+    const res = raw.chart?.result?.[0];
+    if (!res) return [];
+    const ts = res.timestamp || [];
+    const q  = res.indicators?.quote?.[0] || {};
+    return ts.map((t,i) => ({
+      t, c: q.close?.[i], h: q.high?.[i], l: q.low?.[i],
+      o: q.open?.[i], v: q.volume?.[i]
+    })).filter(b => b.c && b.c > 0);
+  } catch(e) { return []; }
+}
+
+function toWeekly(bars) {
+  const weeks = {};
+  bars.forEach(b => {
+    const d   = new Date(b.t * 1000);
+    const day = d.getUTCDay();
+    const mon = new Date(d); mon.setUTCDate(d.getUTCDate() - (day === 0 ? 6 : day - 1));
+    const key = mon.toISOString().slice(0, 10);
+    if (!weeks[key]) weeks[key] = { t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v||0, key };
+    else {
+      weeks[key].h = Math.max(weeks[key].h, b.h);
+      weeks[key].l = Math.min(weeks[key].l, b.l);
+      weeks[key].c = b.c;
+      weeks[key].v += b.v || 0;
+    }
+  });
+  return Object.values(weeks).sort((a,b) => a.t - b.t);
+}
+
+function drawRRG(data) {
+  const loadEl = document.getElementById('rrg-loading');
+  const canvas = document.getElementById('rrgC');
+  if (!canvas) return;
+  loadEl.style.display = 'none';
+  canvas.style.display = 'block';
+
+  const { sectors } = data;
+  if (!sectors.length) return;
+
+  // Canvas sizing
+  const W = canvas.parentElement.offsetWidth - 24 || 300;
+  const H = Math.max(260, Math.round(W * 0.75));
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // Find data range for normalization
+  const allRS  = sectors.flatMap(s => s.trail);
+  const midRS  = allRS.reduce((a,b)=>a+b,0) / allRS.length;
+  const allMom = sectors.map(s => s.rsMom);
+  const maxAbs = Math.max(...allMom.map(Math.abs), 0.5);
+
+  // Map to canvas coords
+  // X: RS Ratio (right = stronger vs Nifty)
+  // Y: RS Momentum (up = improving)
+  const PAD = { t:30, b:30, l:40, r:20 };
+  const CW  = W - PAD.l - PAD.r;
+  const CH  = H - PAD.t - PAD.b;
+  const CX  = W/2, CY = H/2; // center
+
+  function toX(rsRatio) {
+    const norm = (rsRatio - midRS) / (midRS * 0.06 || 1);
+    return PAD.l + CW/2 + norm * (CW/2) * 0.8;
+  }
+  function toY(rsMom) {
+    const norm = rsMom / (maxAbs * 1.2 || 1);
+    return PAD.t + CH/2 - norm * (CH/2) * 0.8;
+  }
+
+  // ── Background quadrants ──────────────────────────────────────────────────
+  ctx.fillStyle = 'rgba(0,212,154,0.06)';
+  ctx.fillRect(PAD.l + CW/2, PAD.t, CW/2, CH/2);       // Leading (top-right)
+  ctx.fillStyle = 'rgba(255,69,96,0.06)';
+  ctx.fillRect(PAD.l + CW/2, PAD.t + CH/2, CW/2, CH/2); // Weakening (bot-right)
+  ctx.fillStyle = 'rgba(0,150,255,0.06)';
+  ctx.fillRect(PAD.l, PAD.t + CH/2, CW/2, CH/2);        // Lagging (bot-left)
+  ctx.fillStyle = 'rgba(245,197,24,0.06)';
+  ctx.fillRect(PAD.l, PAD.t, CW/2, CH/2);               // Improving (top-left)
+
+  // ── Axes ──────────────────────────────────────────────────────────────────
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(PAD.l, H/2); ctx.lineTo(W-PAD.r, H/2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W/2, PAD.t); ctx.lineTo(W/2, H-PAD.b); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // ── Quadrant labels ───────────────────────────────────────────────────────
+  const labels = [
+    { text:'🚀 Leading',   x: W-PAD.r-4,  y: PAD.t+14,  align:'right', col:'rgba(0,212,154,.7)' },
+    { text:'📉 Weakening', x: W-PAD.r-4,  y: H-PAD.b-6, align:'right', col:'rgba(255,69,96,.7)' },
+    { text:'📦 Improving', x: PAD.l+4,    y: PAD.t+14,  align:'left',  col:'rgba(245,197,24,.7)' },
+    { text:'💤 Lagging',   x: PAD.l+4,    y: H-PAD.b-6, align:'left',  col:'rgba(100,150,255,.7)' },
+  ];
+  ctx.font = 'bold 9px system-ui';
+  labels.forEach(l => {
+    ctx.fillStyle  = l.col;
+    ctx.textAlign  = l.align;
+    ctx.fillText(l.text, l.x, l.y);
+  });
+
+  // ── Axis labels ───────────────────────────────────────────────────────────
+  ctx.font      = '8px system-ui';
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.textAlign = 'center';
+  ctx.fillText('← Weaker vs Nifty  |  Stronger vs Nifty →', W/2, H-4);
+  ctx.save(); ctx.translate(10, H/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('RS Momentum', 0, 0);
+  ctx.restore();
+
+  // ── Draw each sector: trail + dot ─────────────────────────────────────────
+  sectors.forEach(sec => {
+    const trail = sec.trail;
+    if (trail.length < 2) return;
+
+    // Trail points (last 4 weeks before current)
+    const pts = trail.map((rs, i) => {
+      // For momentum at each trail point, use diff with prev
+      const mom = i > 0
+        ? ((rs - trail[i-1]) / trail[i-1]) * 100
+        : sec.rsMom;
+      return { x: toX(rs), y: toY(mom) };
+    });
+
+    // Draw trail (fading)
+    for (let i = 1; i < pts.length; i++) {
+      const alpha = 0.15 + (i / pts.length) * 0.5;
+      ctx.strokeStyle = sec.color + Math.round(alpha * 255).toString(16).padStart(2,'0');
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(pts[i-1].x, pts[i-1].y);
+      ctx.lineTo(pts[i].x,   pts[i].y);
+      ctx.stroke();
+      // Small trail dot
+      if (i < pts.length - 1) {
+        ctx.fillStyle = sec.color + '66';
+        ctx.beginPath();
+        ctx.arc(pts[i].x, pts[i].y, 2.5, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // Current position dot
+    const cur  = pts[pts.length - 1];
+    const isBk = sec.rsMom > 0 && sec.rsRatio > midRS; // Leading quadrant
+    const r    = isBk ? 8 : 6;
+    ctx.fillStyle   = sec.color;
+    ctx.strokeStyle = isBk ? '#a855f7' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth   = isBk ? 2.5 : 1;
+    ctx.beginPath();
+    ctx.arc(cur.x, cur.y, r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Breakout fire badge
+    if (isBk) {
+      ctx.font      = '10px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('🔥', cur.x, cur.y - r - 2);
+    }
+
+    // Label
+    ctx.font      = `${isBk?'bold ':''}9px system-ui`;
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    const lx = cur.x;
+    const ly = cur.y + r + 10;
+    // Background pill for readability
+    const tw = ctx.measureText(sec.name).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.roundRect?.(lx - tw/2 - 3, ly - 9, tw + 6, 12, 3);
+    ctx.fill();
+    ctx.fillStyle = sec.color;
+    ctx.fillText(sec.name, lx, ly);
+  });
+
+  // ── Click handler for sector dot ──────────────────────────────────────────
+  canvas.onclick = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    const my   = e.clientY - rect.top;
+    let closest = null, minD = 20;
+    sectors.forEach(sec => {
+      const trail = sec.trail;
+      const cur   = { x: toX(trail[trail.length-1]),
+                      y: toY(sec.rsMom) };
+      const d = Math.hypot(mx - cur.x, my - cur.y);
+      if (d < minD) { minD = d; closest = sec; }
+    });
+    if (closest) {
+      RRG_SEL = closest.name;
+      // Map RRG sector name to screener sector names
+      const secMap = {
+        'IT':'IT','Banking':'Banking','Pharma':'Pharma','Auto':'Auto',
+        'FMCG':'FMCG','Metals':'Metals','Energy':'Energy',
+        'Realty':'Realty','Infra':'Infra','Finance':'Finance',
+      };
+      const screenSec = secMap[closest.name] || closest.name;
+      showBreakoutStocks(screenSec);
+      fBySec(screenSec);
+    }
+  };
 }
 
 </script>
