@@ -1056,6 +1056,7 @@ const SYMS_P2=["NUVOCO", "KARURVYSYA", "CSBBANK", "EQUITASBNK", "UJJIVANSFB", "S
 const SYMS=SYMS_P1; // starts as P1; extended to full universe after bg load
 
 let AS=[],CT='sc',WP=0,SCH=null,ARE=true,CDI=null,CDS=180;
+let P3_DATA=[],P3_DONE=false,P3_LOADING=false; // Phase 3 universe
 let WL=JSON.parse(localStorage.getItem('wl')||'[]');
 let ALT=JSON.parse(localStorage.getItem('alt')||'[]');
 let JNL=JSON.parse(localStorage.getItem('jnl')||'[]');
@@ -2353,6 +2354,9 @@ async function loadData(){
   toast('Full universe loaded ('+AS.length+' stocks) — refreshing…','i');
   const fn={sc:rs,fo:rFnO,fi:rFII,ro:rRot,bt:rBT,sg:rSG};
   if(fn[CT])fn[CT]();
+
+  // ── PHASE 3: NSE Universe breakout scan (silent background) ────────────────
+  setTimeout(loadP3, 3000); // start 3s after P2 done — let UI settle
 }
 
 function updSecFilter(){
@@ -3315,6 +3319,7 @@ function sgRender(view) {
         <option value="goldcross" ${view==='goldcross' ?'selected':''}>✨ Golden Cross — EMA50 × EMA200 signals</option>
         <option value="tvalerts"  ${view==='tvalerts'  ?'selected':''}>📡 TV Alerts — Live TradingView signals</option>
         <option value="srzones"   ${view==='srzones'   ?'selected':''}>📐 S/R Zones — Support &amp; Resistance trade plans</option>
+        <option value="breakouts" ${view==='breakouts' ?'selected':''}>🔥 Breakouts — W Pattern · Weekly/Monthly · Momentum</option>
       </select>
     </div>`;
 
@@ -3333,7 +3338,8 @@ function sgRender(view) {
     sgTVAlerts();
     return;
   }
-  if (view === 'srzones') { sgSRZones(ctrl); return; }
+  if (view === 'srzones')   { sgSRZones(ctrl); return; }
+  if (view === 'breakouts') { sgBreakouts(ctrl); return; }
   area.innerHTML = ctrl + (view === 'movers' ? sgMovers() : view === 'goldcross' ? sgGoldCross() : sgDelivery());
 }
 
@@ -9927,6 +9933,576 @@ function drawRRG(data) {
       fBySec(closest.name);
     }
   };
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — NSE UNIVERSE LOADER + BREAKOUT SCANNER
+// Runs silently after Phase 2. Adds ~200 breakout candidates to AS.
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function loadP3() {
+  if (P3_LOADING || P3_DONE) return;
+  P3_LOADING = true;
+  try {
+    // Step 1: Get breakout candidates from backend (batch Yahoo quote)
+    const existing = AS.map(s => s.symbol).join(',');
+    const r = await fetch(
+      `${PROXY_BASE}/api/nse-universe?existing=${encodeURIComponent(existing)}`,
+      { signal: AbortSignal.timeout(30000) }
+    );
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const candidates = d.candidates || [];
+    if (!candidates.length) { P3_DONE = true; P3_LOADING = false; return; }
+
+    // Step 2: Fetch weekly chart for each candidate (batches of 6)
+    const existingSyms = new Set(AS.map(s => s.symbol));
+    const toFetch = candidates.filter(c => !existingSyms.has(c.symbol)).slice(0, 150);
+    const p3Results = [];
+
+    for (let i = 0; i < toFetch.length; i += 6) {
+      const batch = toFetch.slice(i, i + 6);
+      const res   = await Promise.allSettled(batch.map(c => fetchS(c.symbol)));
+      res.forEach((r, ri) => {
+        if (r.status === 'fulfilled' && r.value) {
+          // Merge extra fields from candidate
+          const s = r.value;
+          s.p3candidate = true;
+          s.nearHiPct   = batch[ri].nearHiPct;
+          s.volRatio    = s.volRatio || batch[ri].volRatio;
+          p3Results.push(s);
+        }
+      });
+      await new Promise(res => setTimeout(res, 200)); // small delay
+    }
+
+    // Merge into AS
+    const ex2 = new Set(AS.map(s => s.symbol));
+    p3Results.forEach(s => { if (!ex2.has(s.symbol)) AS.push(s); });
+    P3_DATA = p3Results;
+    P3_DONE = true;
+
+    // Notify if user is on breakouts tab
+    if (CT === 'sg') sgRender('breakouts');
+    console.log(`[P3] Loaded ${p3Results.length} extra universe stocks`);
+  } catch(e) {
+    console.warn('[P3] Universe load failed:', e.message);
+  } finally {
+    P3_LOADING = false;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BREAKOUT PATTERN DETECTORS
+// Each returns null (no pattern) or {type, score, ...details}
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── W Pattern / Double Bottom ─────────────────────────────────────────────────
+function detectWPattern(s) {
+  const wk = s.weekly;
+  if (!wk || wk.length < 8) return null;
+  const n = wk.length;
+  const lows   = wk.map(b => b.l);
+  const closes = wk.map(b => b.c);
+  const highs  = wk.map(b => b.h);
+  const price  = closes[n - 1];
+
+  // Scan for two lows within 5% of each other
+  // Search back 60 bars, min 1 week apart, max 40 weeks apart
+  let best = null;
+
+  for (let i = n - 40; i < n - 5; i++) {
+    if (i < 1) continue;
+    const lo1 = lows[i];
+
+    for (let j = i + 1; j < Math.min(i + 40, n - 2); j++) {
+      const lo2 = lows[j];
+      const sep = j - i; // weeks between lows
+
+      // Must be within 5% of each other
+      const pct = Math.abs(lo1 - lo2) / Math.min(lo1, lo2);
+      if (pct > 0.05) continue;
+
+      // Find neckline = highest close between the two lows
+      let neckline = 0;
+      for (let k = i + 1; k < j; k++) neckline = Math.max(neckline, highs[k]);
+      if (neckline <= lo1) continue; // no proper neckline
+
+      // Check if price recently broke above neckline (within last 4 bars)
+      let breakoutBar = -1;
+      for (let k = j + 1; k < n; k++) {
+        if (closes[k] > neckline) { breakoutBar = k; break; }
+      }
+      if (breakoutBar < 0) continue; // no breakout yet
+      const barsAfterBO = n - 1 - breakoutBar;
+      if (barsAfterBO > 4) continue; // breakout too old (>4 weeks ago)
+
+      // Quality signals
+      const lo2Higher   = lo2 > lo1;        // higher low = stronger W
+      const bodySize    = Math.abs(closes[breakoutBar] - wk[breakoutBar].o);
+      const avgBody     = wk.slice(-12).reduce((a,b) => a + Math.abs(b.c - b.o), 0) / 12;
+      const bigBOCandle = bodySize > avgBody * 1.3;
+      const volRatio    = s.volRatio || 1;
+      const depthPct    = (neckline - Math.min(lo1, lo2)) / neckline * 100;
+
+      // Score
+      let score = 55;
+      score += lo2Higher              ? 10 : 0;
+      score += bigBOCandle            ? 8  : 0;
+      score += volRatio > 1.5         ? 8  : 0;
+      score += barsAfterBO === 0      ? 10 : barsAfterBO <= 2 ? 5 : 0;
+      score += sep <= 8               ? 5  : 0;  // tighter W
+      score += depthPct > 10          ? 5  : 0;  // meaningful dip
+      score += s.rsi > 50 && s.rsi < 75 ? 5 : 0;
+      score += s.e20 && price > s.e20 ? 4  : 0;
+      score = Math.min(100, score);
+
+      if (!best || score > best.score) {
+        best = {
+          type: 'W Pattern',
+          icon: '〰️',
+          score,
+          neckline:     +neckline.toFixed(2),
+          lo1:          +lo1.toFixed(2),
+          lo2:          +lo2.toFixed(2),
+          lo1bar:       i,
+          lo2bar:       j,
+          breakoutBar,
+          barsAfterBO,
+          sep,
+          depthPct:     +depthPct.toFixed(1),
+          lo2Higher,
+          detail: `Double bottom ₹${lo1.toFixed(0)}–₹${lo2.toFixed(0)} · neckline ₹${neckline.toFixed(0)} · broke out ${barsAfterBO === 0 ? 'this week' : barsAfterBO + 'wk ago'}`,
+          keyLevel: +neckline.toFixed(2),
+          pattern_bars: wk.slice(Math.max(0, i - 2), n).map(b => ({o:b.o,h:b.h,l:b.l,c:b.c})),
+        };
+      }
+    }
+  }
+  return best;
+}
+
+// ── Weekly Breakout ────────────────────────────────────────────────────────────
+function detectWeeklyBreakout(s) {
+  const wk = s.weekly;
+  if (!wk || wk.length < 12) return null;
+  const n      = wk.length;
+  const closes = wk.map(b => b.c);
+  const highs  = wk.map(b => b.h);
+  const price  = closes[n - 1];
+
+  // Resistance = highest weekly close in weeks 4–52 ago (exclude recent 4 weeks)
+  const lookback = wk.slice(Math.max(0, n - 52), n - 4);
+  if (lookback.length < 6) return null;
+  const resistance = Math.max(...lookback.map(b => b.c));
+  const resBar     = wk.findIndex(b => b.c === resistance);
+
+  // How long did resistance hold
+  const weeksHeld = n - 1 - resBar;
+  if (weeksHeld < 4) return null; // too recent — not a real resistance
+
+  // Breakout this week or last week
+  const thisWeek = closes[n - 1] > resistance;
+  const lastWeek = closes[n - 2] > resistance && closes[n - 3] <= resistance;
+  if (!thisWeek && !lastWeek) return null;
+
+  const barsAfterBO = thisWeek ? 0 : 1;
+  if (barsAfterBO > 2) return null;
+
+  const volRatio   = s.volRatio || 1;
+  const bodySize   = Math.abs(closes[n - 1 - barsAfterBO] - wk[n - 1 - barsAfterBO].o);
+  const avgBody    = wk.slice(-12).reduce((a,b) => a + Math.abs(b.c - b.o), 0) / 12;
+  const bigCandle  = bodySize > avgBody * 1.2;
+  const boStrength = (price - resistance) / resistance * 100; // % above resistance
+
+  let score = 55;
+  score += weeksHeld > 26  ? 15 : weeksHeld > 12 ? 8 : 3;
+  score += volRatio > 2.0  ? 15 : volRatio > 1.5 ? 8 : 0;
+  score += bigCandle       ? 8  : 0;
+  score += barsAfterBO === 0 ? 10 : 4;
+  score += s.rsi > 55 && s.rsi < 80 ? 5 : 0;
+  score += boStrength > 2  ? 5  : 0;
+  score = Math.min(100, score);
+
+  return {
+    type: 'Weekly Breakout',
+    icon: '📈',
+    score,
+    resistance:   +resistance.toFixed(2),
+    weeksHeld,
+    barsAfterBO,
+    boStrength:   +boStrength.toFixed(1),
+    volRatio:     +(volRatio).toFixed(2),
+    keyLevel:     +resistance.toFixed(2),
+    detail: `Resistance ₹${resistance.toFixed(0)} held ${weeksHeld}wk · broke out ${barsAfterBO === 0 ? 'this week' : '1wk ago'} · +${boStrength.toFixed(1)}% above`,
+    pattern_bars: wk.slice(Math.max(0, n - 16), n).map(b => ({o:b.o,h:b.h,l:b.l,c:b.c})),
+  };
+}
+
+// ── Monthly Breakout (21-day aggregated candles) ───────────────────────────────
+function detectMonthlyBreakout(s) {
+  if (!s.daily || !s.daily.c || s.daily.c.length < 63) return null;
+  const { c, h, l, o } = s.daily;
+  const n = c.length;
+
+  // Build monthly candles (21 days each)
+  const monthly = [];
+  for (let i = 0; i + 20 < n; i += 21) {
+    const sc = c.slice(i, i + 21), sh = h.slice(i, i + 21);
+    const sl = l.slice(i, i + 21), so = o.slice(i, i + 21);
+    monthly.push({
+      o: so[0], h: Math.max(...sh), l: Math.min(...sl), c: sc[sc.length - 1]
+    });
+  }
+  if (monthly.length < 6) return null;
+
+  const mn = monthly.length;
+  const mc = monthly.map(b => b.c);
+  const price = mc[mn - 1];
+
+  // Resistance = highest monthly close in months 2–24 ago
+  const lookback = monthly.slice(Math.max(0, mn - 24), mn - 2);
+  if (lookback.length < 3) return null;
+  const resistance  = Math.max(...lookback.map(b => b.c));
+  const resBar      = monthly.findIndex(b => b.c === resistance);
+  const monthsHeld  = mn - 1 - resBar;
+  if (monthsHeld < 2) return null;
+
+  const thisMonth = mc[mn - 1] > resistance;
+  const lastMonth = mc[mn - 2] > resistance && mc[mn - 3] <= resistance;
+  if (!thisMonth && !lastMonth) return null;
+
+  const barsAfterBO = thisMonth ? 0 : 1;
+  const boStrength  = (price - resistance) / resistance * 100;
+  const volRatio    = s.volRatio || 1;
+
+  let score = 60; // Monthly breakouts get higher base
+  score += monthsHeld > 12 ? 15 : monthsHeld > 6 ? 8 : 3;
+  score += volRatio > 2.0  ? 12 : volRatio > 1.5  ? 6 : 0;
+  score += barsAfterBO === 0 ? 10 : 4;
+  score += boStrength > 3  ? 8  : boStrength > 1 ? 4 : 0;
+  score += s.rsi > 55 && s.rsi < 82 ? 5 : 0;
+  score = Math.min(100, score);
+
+  return {
+    type: 'Monthly Breakout',
+    icon: '🗓️',
+    score,
+    resistance:  +resistance.toFixed(2),
+    monthsHeld,
+    barsAfterBO,
+    boStrength:  +boStrength.toFixed(1),
+    keyLevel:    +resistance.toFixed(2),
+    detail: `Monthly resistance ₹${resistance.toFixed(0)} held ${monthsHeld}mo · broke out ${barsAfterBO === 0 ? 'this month' : 'last month'} · +${boStrength.toFixed(1)}% above`,
+    pattern_bars: monthly.slice(Math.max(0, mn - 10), mn).map(b => ({o:b.o,h:b.h,l:b.l,c:b.c})),
+  };
+}
+
+// ── Momentum Shift ─────────────────────────────────────────────────────────────
+function detectMomentumShift(s) {
+  const wk = s.weekly;
+  if (!wk || wk.length < 14) return null;
+  const n     = wk.length;
+  const price = wk[n - 1].c;
+
+  // Last 2 weeks vs prior 8 weeks body size
+  const recentBodies = [0, 1].map(i => Math.abs(wk[n - 1 - i].c - wk[n - 1 - i].o));
+  const priorBodies  = wk.slice(n - 10, n - 2).map(b => Math.abs(b.c - b.o));
+  const avgPrior     = priorBodies.reduce((a, b) => a + b, 0) / priorBodies.length || 1;
+  const avgRecent    = recentBodies.reduce((a, b) => a + b, 0) / recentBodies.length;
+  const expansion    = avgRecent / avgPrior;
+
+  if (expansion < 1.8) return null; // bodies not big enough
+
+  // Both recent candles must be bullish
+  const both_bull = wk[n-1].c > wk[n-1].o && wk[n-2].c > wk[n-2].o;
+  if (!both_bull) return null;
+
+  // Price trending (above EMA20 weekly)
+  const recentCloses = wk.slice(-25).map(b => b.c);
+  const ema20 = (() => {
+    const k = 2 / 21; let e = recentCloses[0];
+    recentCloses.forEach(c => e = c * k + e * (1 - k));
+    return e;
+  })();
+  const aboveEMA = price > ema20;
+
+  // Was there quiet compression before? (prior bodies smaller than avg of last 20)
+  const prior20bodies = wk.slice(n - 12, n - 2).map(b => Math.abs(b.c - b.o));
+  const wasQuiet = prior20bodies.filter(b => b < avgPrior * 0.8).length >= 4;
+
+  const volRatio = s.volRatio || 1;
+
+  let score = 52;
+  score += expansion > 3   ? 15 : expansion > 2.5 ? 10 : 5;
+  score += aboveEMA        ? 8  : 0;
+  score += wasQuiet        ? 8  : 0;
+  score += volRatio > 2.0  ? 8  : volRatio > 1.5 ? 4 : 0;
+  score += s.rsi > 55 && s.rsi < 80 ? 6 : 0;
+  score = Math.min(100, score);
+
+  return {
+    type: 'Momentum Shift',
+    icon: '⚡',
+    score,
+    expansion:   +expansion.toFixed(1),
+    aboveEMA,
+    wasQuiet,
+    ema20:       +ema20.toFixed(2),
+    keyLevel:    +ema20.toFixed(2),
+    detail: `Weekly bodies ${expansion.toFixed(1)}x larger than prior avg · ${wasQuiet ? 'broke out of quiet compression' : 'accelerating trend'} · ${aboveEMA ? 'above EMA20' : 'watch EMA20'}`,
+    pattern_bars: wk.slice(Math.max(0, n - 14), n).map(b => ({o:b.o,h:b.h,l:b.l,c:b.c})),
+  };
+}
+
+// ── Run all detectors on a stock ───────────────────────────────────────────────
+function detectBreakout(s) {
+  const patterns = [
+    detectWPattern(s),
+    detectWeeklyBreakout(s),
+    detectMonthlyBreakout(s),
+    detectMomentumShift(s),
+  ].filter(Boolean);
+  if (!patterns.length) return null;
+  // Return highest scoring pattern (but keep all for display)
+  patterns.sort((a, b) => b.score - a.score);
+  return { best: patterns[0], all: patterns };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BREAKOUTS TAB RENDER
+// ══════════════════════════════════════════════════════════════════════════════
+
+let BK_FILTER = 'all';   // all | wpattern | weekly | monthly | momentum
+
+function sgBreakouts(ctrl) {
+  const area = document.getElementById('area');
+  area.innerHTML = ctrl + `
+    <div class="sh">🔥 Breakout Scanner
+      <div class="sh-line"></div>
+      <span style="font-size:.63rem;color:var(--muted2)">W Pattern · Weekly/Monthly Breakout · Momentum Shift · ${AS.length} stocks</span>
+    </div>
+
+    <!-- Filter row -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+      ${[
+        ['all',      '🔥 All'],
+        ['wpattern', '〰️ W Pattern'],
+        ['weekly',   '📈 Weekly BO'],
+        ['monthly',  '🗓️ Monthly BO'],
+        ['momentum', '⚡ Momentum'],
+      ].map(([k,l]) => `
+        <button onclick="BK_FILTER='${k}';sgBreakouts(document.querySelector('.sg-ctrl')?.outerHTML||'')"
+          class="bk-filter-btn" data-k="${k}"
+          style="padding:5px 12px;border-radius:20px;font-size:.68rem;font-weight:700;cursor:pointer;
+                 border:1px solid ${BK_FILTER===k?'#a855f7':'var(--border2)'};
+                 background:${BK_FILTER===k?'rgba(168,85,247,.18)':'var(--card2)'};
+                 color:${BK_FILTER===k?'#f5d0fe':'var(--muted2)'}">${l}</button>
+      `).join('')}
+    </div>
+
+    <!-- P3 status -->
+    ${!P3_DONE ? `
+    <div style="font-size:.67rem;color:var(--yellow);padding:8px 12px;
+                background:rgba(245,197,24,.08);border:1px solid rgba(245,197,24,.2);
+                border-radius:8px;margin-bottom:12px">
+      ⏳ NSE Universe (Phase 3) still loading — showing ${AS.length} stocks so far.
+      Results will refresh automatically when complete.
+    </div>` : `
+    <div style="font-size:.64rem;color:var(--green);padding:6px 12px;
+                background:rgba(0,212,154,.06);border:1px solid rgba(0,212,154,.2);
+                border-radius:8px;margin-bottom:12px">
+      ✅ Full scan: ${AS.length} stocks (${P3_DATA.length} from NSE universe)
+    </div>`}
+
+    <div id="bk-results">
+      <div style="text-align:center;padding:20px">
+        <div class="spin" style="margin:0 auto 10px"></div>
+        <div style="font-size:.7rem;color:var(--muted2)">Scanning ${AS.length} stocks for patterns…</div>
+      </div>
+    </div>`;
+
+  // Run scan in next tick so UI renders first
+  setTimeout(() => renderBreakouts(), 30);
+}
+
+function renderBreakouts() {
+  const resEl = document.getElementById('bk-results');
+  if (!resEl) return;
+
+  // Scan all stocks
+  const results = [];
+  for (const s of AS) {
+    if (!s.weekly || s.weekly.length < 8) continue;
+    const det = detectBreakout(s);
+    if (!det) continue;
+    const best = det.best;
+    if (BK_FILTER !== 'all') {
+      const filterMap = {
+        wpattern: 'W Pattern', weekly: 'Weekly Breakout',
+        monthly:  'Monthly Breakout', momentum: 'Momentum Shift',
+      };
+      if (best.type !== filterMap[BK_FILTER] &&
+          !det.all.some(p => p.type === filterMap[BK_FILTER])) continue;
+      // Use the filtered pattern as the best for display
+      const filtered = det.all.find(p => p.type === filterMap[BK_FILTER]);
+      if (filtered) det.best = filtered;
+    }
+    results.push({ s, det });
+  }
+
+  results.sort((a, b) => b.det.best.score - a.det.best.score);
+
+  if (!results.length) {
+    resEl.innerHTML = `<div class="ibox" style="color:var(--yellow)">
+      No ${BK_FILTER === 'all' ? '' : BK_FILTER + ' '}breakout patterns found right now.<br>
+      <span style="font-size:.65rem;color:var(--muted2)">
+        Patterns require specific price structure. Try a different filter
+        or wait for more market data to load.
+      </span></div>`;
+    return;
+  }
+
+  resEl.innerHTML = `
+    <div style="font-size:.68rem;color:var(--muted2);margin-bottom:10px">
+      <strong style="color:var(--text)">${results.length} patterns</strong> found · top 40 shown · sorted by quality score
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${results.slice(0, 40).map(({ s, det }) => bkCard(s, det)).join('')}
+    </div>`;
+}
+
+// ── Mini candlestick visual (SVG) ─────────────────────────────────────────────
+function miniCandles(bars, keyLevel, w=160, h=52) {
+  if (!bars || !bars.length) return '';
+  const allH = bars.map(b => b.h), allL = bars.map(b => b.l);
+  const maxP  = Math.max(...allH), minP = Math.min(...allL);
+  const range = maxP - minP || 1;
+  const bw    = Math.floor((w - 4) / bars.length);
+  const pad   = 2;
+
+  function py(p) { return h - pad - ((p - minP) / range) * (h - pad * 2); }
+
+  const kly = keyLevel ? py(keyLevel) : -1;
+  let svg = `<svg width="${w}" height="${h}" style="display:block">`;
+
+  // Key level line
+  if (kly >= 0 && kly <= h)
+    svg += `<line x1="0" y1="${kly.toFixed(1)}" x2="${w}" y2="${kly.toFixed(1)}"
+              stroke="#a855f7" stroke-width="1" stroke-dasharray="3,2" opacity=".7"/>`;
+
+  bars.forEach((b, i) => {
+    const x  = pad + i * bw + bw * 0.15;
+    const bw2 = bw * 0.7;
+    const bull = b.c >= b.o;
+    const col  = bull ? '#00d49a' : '#ff4560';
+    const top  = py(Math.max(b.o, b.c));
+    const bot  = py(Math.min(b.o, b.c));
+    const ht   = Math.max(bot - top, 1);
+    const mid  = (top + bot) / 2;
+    svg += `<line x1="${(x + bw2/2).toFixed(1)}" y1="${py(b.h).toFixed(1)}"
+               x2="${(x + bw2/2).toFixed(1)}" y2="${py(b.l).toFixed(1)}"
+               stroke="${col}" stroke-width="1"/>`;
+    svg += `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}"
+               width="${bw2.toFixed(1)}" height="${ht.toFixed(1)}"
+               fill="${col}" rx="1"/>`;
+  });
+  svg += '</svg>';
+  return svg;
+}
+
+// ── Breakout card ─────────────────────────────────────────────────────────────
+function bkCard(s, det) {
+  const p      = det.best;
+  const allP   = det.all;
+  const price  = s.price || 0;
+  const dCol   = (s.pctChange || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+  const wCol   = (s.weekChg   || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+  const secCol = SC[s.sector]  || '#636e72';
+  const scoreCol = p.score >= 80 ? 'var(--green)' : p.score >= 65 ? 'var(--yellow)' : 'var(--muted2)';
+
+  // Score ring
+  const ring = `<div style="width:38px;height:38px;border-radius:50%;
+    background:conic-gradient(${scoreCol} ${p.score * 3.6}deg,var(--card2) 0deg);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0">
+    <div style="width:28px;height:28px;border-radius:50%;background:var(--card);
+      display:flex;align-items:center;justify-content:center;
+      font-size:.65rem;font-weight:800;color:${scoreCol}">${p.score}</div>
+  </div>`;
+
+  // Multi-pattern badges
+  const badges = allP.map(pp =>
+    `<span style="font-size:.55rem;padding:2px 6px;border-radius:10px;font-weight:700;
+       background:rgba(168,85,247,.12);color:#d8b4fe;border:1px solid rgba(168,85,247,.2)">
+      ${pp.icon} ${pp.type}
+    </span>`).join('');
+
+  return `
+  <div style="background:var(--card);border:1px solid var(--border2);border-radius:12px;
+              padding:12px;cursor:pointer;transition:border .15s"
+       onclick="openSym('${s.symbol}')"
+       onmouseover="this.style.borderColor='rgba(168,85,247,.4)'"
+       onmouseout="this.style.borderColor='var(--border2)'">
+    <!-- Header row -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      ${ring}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+          <span style="font-size:.85rem;font-weight:800;color:var(--text)">${s.symbol}</span>
+          <span style="font-size:.6rem;padding:2px 6px;border-radius:10px;font-weight:700;
+                       background:${secCol}18;color:${secCol};border:1px solid ${secCol}30">
+            ${s.sector || '?'}
+          </span>
+          ${s.p3candidate ? '<span style="font-size:.55rem;padding:1px 5px;border-radius:8px;background:rgba(99,110,114,.2);color:var(--muted2)">NSE+</span>' : ''}
+        </div>
+        <div style="font-size:.62rem;color:var(--muted2);margin-top:1px;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${s.name || ''}
+        </div>
+      </div>
+      <!-- Price column -->
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:.85rem;font-weight:800;color:var(--text)">₹${price.toFixed(price>100?0:1)}</div>
+        <div style="font-size:.6rem;color:${dCol}">${(s.pctChange||0)>=0?'+':''}${(s.pctChange||0).toFixed(1)}% D</div>
+        <div style="font-size:.6rem;color:${wCol}">${(s.weekChg||0)>=0?'+':''}${(s.weekChg||0).toFixed(1)}% W</div>
+      </div>
+    </div>
+
+    <!-- Pattern badges -->
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">${badges}</div>
+
+    <!-- Pattern detail -->
+    <div style="font-size:.66rem;color:var(--muted2);margin-bottom:8px;line-height:1.5">
+      ${p.detail}
+    </div>
+
+    <!-- Mini chart + stats row -->
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="flex:1;border-radius:6px;overflow:hidden;background:var(--card2)">
+        ${miniCandles(p.pattern_bars, p.keyLevel)}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;flex-shrink:0">
+        <div style="background:var(--card2);border-radius:6px;padding:4px 6px;text-align:center">
+          <div style="font-size:.58rem;color:var(--muted2)">RSI</div>
+          <div style="font-size:.7rem;font-weight:700;color:${s.rsi>50&&s.rsi<75?'var(--green)':'var(--muted2)'}">${s.rsi?s.rsi.toFixed(0):'–'}</div>
+        </div>
+        <div style="background:var(--card2);border-radius:6px;padding:4px 6px;text-align:center">
+          <div style="font-size:.58rem;color:var(--muted2)">Vol</div>
+          <div style="font-size:.7rem;font-weight:700;color:${(s.volRatio||1)>=1.5?'var(--green)':'var(--muted2)'}">${(s.volRatio||1).toFixed(1)}x</div>
+        </div>
+        <div style="background:var(--card2);border-radius:6px;padding:4px 6px;text-align:center">
+          <div style="font-size:.58rem;color:var(--muted2)">Key ₹</div>
+          <div style="font-size:.65rem;font-weight:700;color:#a855f7">${p.keyLevel?.toFixed(0)||'–'}</div>
+        </div>
+        <div style="background:var(--card2);border-radius:6px;padding:4px 6px;text-align:center">
+          <div style="font-size:.58rem;color:var(--muted2)">Score</div>
+          <div style="font-size:.7rem;font-weight:700;color:${scoreCol}">${p.score}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 </script>
