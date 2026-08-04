@@ -10010,14 +10010,13 @@ function detectWPattern(s) {
   const price  = closes[n - 1];
 
   // Scan for two lows within 5% of each other
-  // Search back 60 bars, min 1 week apart, max 40 weeks apart
+  // Limit to last 30 bars for speed on mobile
   let best = null;
 
-  for (let i = n - 40; i < n - 5; i++) {
-    if (i < 1) continue;
+  for (let i = Math.max(1, n - 30); i < n - 5; i++) {
     const lo1 = lows[i];
 
-    for (let j = i + 1; j < Math.min(i + 40, n - 2); j++) {
+    for (let j = i + 1; j < Math.min(i + 20, n - 2); j++) {
       const lo2 = lows[j];
       const sep = j - i; // weeks between lows
 
@@ -10332,46 +10331,73 @@ function renderBreakouts() {
   const resEl = document.getElementById('bk-results');
   if (!resEl) return;
 
-  // Scan all stocks
-  const results = [];
-  for (const s of AS) {
-    if (!s.weekly || s.weekly.length < 8) continue;
-    const det = detectBreakout(s);
-    if (!det) continue;
-    const best = det.best;
-    if (BK_FILTER !== 'all') {
-      const filterMap = {
-        wpattern: 'W Pattern', weekly: 'Weekly Breakout',
-        monthly:  'Monthly Breakout', momentum: 'Momentum Shift',
-      };
-      if (best.type !== filterMap[BK_FILTER] &&
-          !det.all.some(p => p.type === filterMap[BK_FILTER])) continue;
-      // Use the filtered pattern as the best for display
-      const filtered = det.all.find(p => p.type === filterMap[BK_FILTER]);
-      if (filtered) det.best = filtered;
+  const filterMap = {
+    wpattern: 'W Pattern', weekly: 'Weekly Breakout',
+    monthly:  'Monthly Breakout', momentum: 'Momentum Shift',
+  };
+
+  // ── Chunked async scan — 30 stocks per chunk so phone stays responsive ──────
+  const eligible = AS.filter(s => s.weekly && s.weekly.length >= 8);
+  const results  = [];
+  const CHUNK    = 30;
+  let   idx      = 0;
+
+  function processChunk() {
+    const end = Math.min(idx + CHUNK, eligible.length);
+    for (let i = idx; i < end; i++) {
+      const s   = eligible[i];
+      const det = detectBreakout(s);
+      if (!det) continue;
+      if (BK_FILTER !== 'all') {
+        const wantType = filterMap[BK_FILTER];
+        if (!det.all.some(p => p.type === wantType)) continue;
+        const fp = det.all.find(p => p.type === wantType);
+        if (fp) det.best = fp;
+      }
+      results.push({ s, det });
     }
-    results.push({ s, det });
+    idx = end;
+
+    // Update progress
+    const pct = Math.round(idx / eligible.length * 100);
+    if (resEl && idx < eligible.length) {
+      resEl.innerHTML = `
+        <div style="text-align:center;padding:16px">
+          <div style="width:100%;height:4px;background:var(--card2);border-radius:2px;margin-bottom:10px">
+            <div style="width:${pct}%;height:4px;background:#a855f7;border-radius:2px;transition:width .2s"></div>
+          </div>
+          <div style="font-size:.68rem;color:var(--muted2)">
+            Scanning… ${idx}/${eligible.length} stocks · ${results.length} patterns found so far
+          </div>
+        </div>`;
+      setTimeout(processChunk, 0); // yield to browser, then continue
+      return;
+    }
+
+    // Done — render results
+    results.sort((a, b) => b.det.best.score - a.det.best.score);
+
+    if (!results.length) {
+      resEl.innerHTML = `<div class="ibox" style="color:var(--yellow)">
+        No ${BK_FILTER === 'all' ? '' : filterMap[BK_FILTER] + ' '}patterns found right now.<br>
+        <span style="font-size:.65rem;color:var(--muted2)">
+          Patterns require specific price structure. Try a different filter
+          or check after more stocks load.
+        </span></div>`;
+      return;
+    }
+
+    resEl.innerHTML = `
+      <div style="font-size:.68rem;color:var(--muted2);margin-bottom:10px">
+        <strong style="color:var(--text)">${results.length} patterns</strong> found
+        in ${eligible.length} stocks · top 40 shown · sorted by score
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${results.slice(0, 40).map(({ s, det }) => bkCard(s, det)).join('')}
+      </div>`;
   }
 
-  results.sort((a, b) => b.det.best.score - a.det.best.score);
-
-  if (!results.length) {
-    resEl.innerHTML = `<div class="ibox" style="color:var(--yellow)">
-      No ${BK_FILTER === 'all' ? '' : BK_FILTER + ' '}breakout patterns found right now.<br>
-      <span style="font-size:.65rem;color:var(--muted2)">
-        Patterns require specific price structure. Try a different filter
-        or wait for more market data to load.
-      </span></div>`;
-    return;
-  }
-
-  resEl.innerHTML = `
-    <div style="font-size:.68rem;color:var(--muted2);margin-bottom:10px">
-      <strong style="color:var(--text)">${results.length} patterns</strong> found · top 40 shown · sorted by quality score
-    </div>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      ${results.slice(0, 40).map(({ s, det }) => bkCard(s, det)).join('')}
-    </div>`;
+  processChunk();
 }
 
 // ── Mini candlestick visual (SVG) ─────────────────────────────────────────────
