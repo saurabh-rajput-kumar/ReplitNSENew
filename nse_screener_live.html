@@ -2299,7 +2299,7 @@ async function loadData(){
   if(ARE){if(isMarketOpen())startAR();else{ARE=false;const cb=document.getElementById('art'),sl2=document.getElementById('arsl'),th=document.getElementById('arth');if(cb)cb.checked=false;if(sl2)sl2.style.background='var(--border)';if(th)th.style.left='2px';const e=document.getElementById('arcd');if(e){e.textContent='Closed';e.style.color='var(--muted)';}}}
   rs();
   toast('Phase 1 loaded ('+AS.length+' stocks) — loading extended universe in background…','i');
-  setTimeout(() => bkOnP1Done([...AS]), 500); // scan P1 stocks immediately
+  setTimeout(() => bkOnP1Done([...AS]), 3000); // wait 3s for weekly data to populate
   bgBadge(true, undefined, undefined, 'Phase 2');
 
   // ── PHASE 2: Background load SYMS_P2 ───────────────────────────────────
@@ -2323,7 +2323,7 @@ async function loadData(){
   updSecFilter();
   document.getElementById('lu').textContent='✅ Full '+new Date().toLocaleTimeString('en-IN');
   toast('Full universe loaded ('+AS.length+' stocks) — refreshing…','i');
-  setTimeout(() => bkOnP2Done([...AS]), 300); // scan new P2 stocks
+  setTimeout(() => bkOnP2Done([...AS]), 2000); // wait 2s for weekly data
   const fn={sc:rs,fo:rFnO,fi:rFII,ro:rRot,sg:rSG};
   if(fn[CT])fn[CT]();
 
@@ -10834,6 +10834,7 @@ let BK_PHASE_DONE = { p1:false, p2:false, p3:false };
 // ── Pre-filter: cheap check ───────────────────────────────────────────────────
 function bkIsCandidate(s) {
   // Pre-filter: exclude stocks with clearly no setup
+  // Returns true if stock should be checked for patterns
   // Intentionally broad — pattern detectors apply their own strict rules
   // Must have weekly data
   if (!s.weekly || s.weekly.length < 16) return false;
@@ -10900,6 +10901,7 @@ function bkScanChunked(stocks, phase, isFinal) {
 
     // Run pattern detection only on candidates
     const cands = batch.filter(s => bkIsCandidate(s));
+    if (cands.length) console.log('[BK] chunk: '+batch.length+' stocks, '+cands.length+' candidates');
     const found = [];
     cands.forEach(s => {
       const det = detectBreakout(s);
@@ -11027,7 +11029,8 @@ function bkOnP1Done(stocks) {
   // Clear results area
   const resEl = document.getElementById('bk-results');
   if (resEl) resEl.innerHTML = '<div class="bk-stream" style="display:flex;flex-direction:column;gap:10px"></div>';
-  bkScanChunked(withWeekly, 1, true); // isFinal=true since P2 scan handles P2 stocks separately
+  console.log('[BK] P1 scan: '+withWeekly.length+' stocks with weekly data out of '+AS.length+' total');
+  bkScanChunked(withWeekly, 1, true);
 }
 function bkOnP2Done(stocks) {
   const newStocks = stocks.filter(s => s.weekly && s.weekly.length >= 8 && !BK_SCANNED.has(s.symbol));
@@ -11095,12 +11098,7 @@ function sgBreakouts(ctrl) {
       <span style="color:var(--muted2)">${AS.length>0?'Starting scan…':'Load stocks first'}</span>
     </div>
 
-    <!-- P3 status -->
-    ${!P3_DONE?`<div style="font-size:.63rem;color:#fb923c;padding:5px 10px;
-      background:rgba(251,146,60,.08);border:1px solid rgba(251,146,60,.25);
-      border-radius:7px;margin-bottom:10px">
-      🟠 Phase 3 (Phase 3) loading — results update as more stocks scan
-    </div>`:''}
+
 
     <div id="bk-results"></div>`;
 
