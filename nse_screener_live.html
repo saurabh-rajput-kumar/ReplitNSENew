@@ -2376,7 +2376,7 @@ function bgBadge(loading, pct, total){
   }
   if(!loading){el.style.opacity='0';setTimeout(()=>el.remove(),500);return;}
   el.style.opacity='1';
-  el.innerHTML=`<div style="width:8px;height:8px;border-radius:50%;background:var(--yellow);animation:pulse 1s infinite"></div>⏳ Loading extended universe${pct!==undefined?' ('+pct+'%)':''}${total?' · '+total+' stocks':''}`;
+  const label=arguments[3]||'extended universe';el.innerHTML=`<div style="width:8px;height:8px;border-radius:50%;background:var(--yellow);animation:pulse 1s infinite"></div>⏳ Loading ${label}${pct!==undefined?' ('+pct+'%)':''}${total?' · '+total+' stocks':''}`;
 }
 
 function startARI(){if(ALI)clearInterval(ALI);ALI=setInterval(chkAlerts,30000);}
@@ -9947,6 +9947,7 @@ function drawRRG(data) {
 async function loadP3() {
   if (P3_LOADING || P3_DONE) return;
   P3_LOADING = true;
+  bgBadge(true, undefined, undefined, 'NSE Universe');
   try {
     // Step 1: Get breakout candidates from backend (batch Yahoo quote)
     const existing = AS.map(s => s.symbol).join(',');
@@ -9969,7 +9970,6 @@ async function loadP3() {
       const res   = await Promise.allSettled(batch.map(c => fetchS(c.symbol)));
       res.forEach((r, ri) => {
         if (r.status === 'fulfilled' && r.value) {
-          // Merge extra fields from candidate
           const s = r.value;
           s.p3candidate = true;
           s.nearHiPct   = batch[ri].nearHiPct;
@@ -9977,7 +9977,9 @@ async function loadP3() {
           p3Results.push(s);
         }
       });
-      await new Promise(res => setTimeout(res, 200)); // small delay
+      const pct3 = Math.round((i + 6) / toFetch.length * 100);
+      bgBadge(true, pct3, AS.length + p3Results.length, 'NSE Universe');
+      await new Promise(res => setTimeout(res, 200));
     }
 
     // Merge into AS
@@ -9985,6 +9987,7 @@ async function loadP3() {
     p3Results.forEach(s => { if (!ex2.has(s.symbol)) AS.push(s); });
     P3_DATA = p3Results;
     P3_DONE = true;
+    bgBadge(false); // dismiss loading badge
 
     // Rescan breakouts with P3 stocks included
     setTimeout(scheduleBKScan, 500); // invalidates cache + rescans with full universe
@@ -9992,6 +9995,7 @@ async function loadP3() {
     if (CT === 'sg') sgRender('breakouts');
     console.log(`[P3] Loaded ${p3Results.length} extra universe stocks`);
   } catch(e) {
+    bgBadge(false);
     console.warn('[P3] Universe load failed:', e.message);
   } finally {
     P3_LOADING = false;
@@ -10336,30 +10340,49 @@ let BK_RESULTS  = null;   // cached scan results
 let BK_SCANNING = false;  // scan in progress flag
 let BK_SCAN_IDX = 0;      // current scan position
 
-// Called after P1 load and after P2 load — runs scan in background
+// Called after P1/P2/P3 load — runs scan in background
+let BK_ELIGIBLE = []; // snapshot of stocks to scan — fixed at scan start
+
 function scheduleBKScan() {
   if (BK_SCANNING) return;
-  BK_RESULTS  = null;  // invalidate cache
+  BK_RESULTS  = null;
   BK_SCAN_IDX = 0;
   BK_SCANNING = false;
-  setTimeout(runBKScanChunk, 800); // start after slight delay
+  // Snapshot the eligible list NOW so it doesn't change mid-scan
+  BK_ELIGIBLE = AS.filter(s => s.weekly && s.weekly.length >= 8);
+  setTimeout(runBKScanChunk, 500);
 }
 
 function runBKScanChunk() {
-  const eligible = AS.filter(s => s.weekly && s.weekly.length >= 8);
-  if (!BK_RESULTS) { BK_RESULTS = []; BK_SCANNING = true; BK_SCAN_IDX = 0; }
+  if (!BK_SCANNING) {
+    BK_RESULTS  = [];
+    BK_SCANNING = true;
+    BK_SCAN_IDX = 0;
+  }
 
-  const CHUNK = 20; // smaller chunks — runs in background
-  const end   = Math.min(BK_SCAN_IDX + CHUNK, eligible.length);
+  const CHUNK = 15; // 15 stocks per chunk — phone-safe
+  const end   = Math.min(BK_SCAN_IDX + CHUNK, BK_ELIGIBLE.length);
 
   for (let i = BK_SCAN_IDX; i < end; i++) {
-    const det = detectBreakout(eligible[i]);
-    if (det) BK_RESULTS.push({ s: eligible[i], det });
+    const det = detectBreakout(BK_ELIGIBLE[i]);
+    if (det) BK_RESULTS.push({ s: BK_ELIGIBLE[i], det });
   }
   BK_SCAN_IDX = end;
 
-  if (BK_SCAN_IDX < eligible.length) {
-    setTimeout(runBKScanChunk, 16); // ~1 frame delay, runs in background
+  // Update progress if breakouts tab is open
+  if (CT === 'sg') {
+    const resEl = document.getElementById('bk-results');
+    if (resEl && resEl.querySelector('.bk-progress')) {
+      const pct = Math.round(BK_SCAN_IDX / BK_ELIGIBLE.length * 100);
+      const bar = resEl.querySelector('.bk-bar');
+      const txt = resEl.querySelector('.bk-txt');
+      if (bar) bar.style.width = pct + '%';
+      if (txt) txt.textContent = `Scanning… ${BK_SCAN_IDX}/${BK_ELIGIBLE.length} stocks · ${BK_RESULTS.length} patterns found`;
+    }
+  }
+
+  if (BK_SCAN_IDX < BK_ELIGIBLE.length) {
+    setTimeout(runBKScanChunk, 20); // 20ms gap — browser can repaint
     return;
   }
 
@@ -10390,19 +10413,15 @@ function renderBreakouts() {
   const pct      = eligible.length ? Math.round(scanned / eligible.length * 100) : 0;
 
   resEl.innerHTML = `
-    <div style="text-align:center;padding:20px">
-      <div style="width:100%;height:6px;background:var(--card2);border-radius:3px;margin-bottom:12px">
-        <div style="width:${pct}%;height:6px;background:linear-gradient(90deg,#7c3aed,#a855f7);
-                    border-radius:3px;transition:width .3s"></div>
+    <div class="bk-progress" style="padding:20px">
+      <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--muted2);margin-bottom:6px">
+        <span class="bk-txt">Starting scan of ${eligible.length} stocks…</span>
+        <span class="bk-pct">0%</span>
       </div>
-      <div style="font-size:.7rem;color:var(--muted2)">
-        ${BK_SCANNING
-          ? `Scanning in background… ${scanned}/${eligible.length} stocks`
-          : `Starting scan of ${eligible.length} stocks…`}
+      <div style="width:100%;height:6px;background:var(--card2);border-radius:3px;margin-bottom:10px">
+        <div class="bk-bar" style="width:0%;height:6px;background:linear-gradient(90deg,#7c3aed,#a855f7);border-radius:3px;transition:width .3s"></div>
       </div>
-      <div style="font-size:.62rem;color:var(--muted2);margin-top:6px">
-        Results will appear automatically when ready
-      </div>
+      <div style="font-size:.62rem;color:var(--muted2)">Results will appear automatically when ready</div>
     </div>`;
 
   if (!BK_SCANNING) scheduleBKScan();
