@@ -5538,21 +5538,14 @@ function rsBRK() {
   const __ath_rsBRK   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
   const __swing_rsBRK = stocks.filter(s => classifyBreakout(s,'') === 'swing');
   const __view_rsBRK  = SC_VIEW === 'ath' ? __ath_rsBRK : __swing_rsBRK;
-  const __subtabs_rsBRK = `
-    <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
-      <button onclick="SC_VIEW='swing';rsBRK&&CT==='sc'?rsBRK():rsRNG&&CT==='sc'?rsRNG():rsPAT()"
-        style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
-               background:\${SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
-               color:\${SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
-        ⚡ Swing Breakout <span style="font-size:.6rem;opacity:.8">(\${__swing_rsBRK.length})</span>
-      </button>
-      <button onclick="SC_VIEW='ath';rsBRK&&CT==='sc'?rsBRK():rsRNG&&CT==='sc'?rsRNG():rsPAT()"
-        style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
-               background:\${SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
-               color:\${SC_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
-        🚀 ATH Momentum <span style="font-size:.6rem;opacity:.8">(\${__ath_rsBRK.length})</span>
-      </button>
-    </div>`;
+  const __swBg_brk = SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)';
+  const __swCl_brk = SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)';
+  const __atBg_brk = SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)';
+  const __atCl_brk = SC_VIEW==='ath'?'#fde68a':'var(--muted2)';
+  const __subtabs_rsBRK = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
+    + '<button onclick="SC_VIEW=\'swing\';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+__swBg_brk+';color:'+__swCl_brk+';border-right:1px solid var(--border2)">⚡ Swing ('+__swing_rsBRK.length+')</button>'
+    + '<button onclick="SC_VIEW=\'ath\';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+__atBg_brk+';color:'+__atCl_brk+'">🚀 ATH ('+__ath_rsBRK.length+')</button>'
+    + '</div>'
 
   area.innerHTML = stratBanner + __subtabs_rsBRK + `<div class="ibox" style="color:var(--yellow)">
       No ${tfLabels[tf].toLowerCase()} breakouts detected. This is normal — genuine breakouts are rare.
@@ -5756,19 +5749,14 @@ function rsRNG() {
   const _ath   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
   const _swing = stocks.filter(s => classifyBreakout(s,'') === 'swing');
   const _view  = SC_VIEW === 'ath' ? _ath : _swing;
-  const _subtabs = `
-    <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
-      <button onclick="SC_VIEW='swing';rsRNG()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
-               background:\${SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
-               color:\${SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
-        ⚡ Swing <span style="font-size:.6rem;opacity:.8">(\${_swing.length})</span>
-      </button>
-      <button onclick="SC_VIEW='ath';rsRNG()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
-               background:\${SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
-               color:\${SC_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
-        🚀 ATH <span style="font-size:.6rem;opacity:.8">(\${_ath.length})</span>
-      </button>
-    </div>`;
+  const _swBg  = SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)';
+  const _swCl  = SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)';
+  const _atBg  = SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)';
+  const _atCl  = SC_VIEW==='ath'?'#fde68a':'var(--muted2)';
+  const _subtabs = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
+    + '<button onclick="SC_VIEW=\'swing\';rsRNG()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+_swBg+';color:'+_swCl+';border-right:1px solid var(--border2)">⚡ Swing ('+_swing.length+')</button>'
+    + '<button onclick="SC_VIEW=\'ath\';rsRNG()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+_atBg+';color:'+_atCl+'">🚀 ATH ('+_ath.length+')</button>'
+    + '</div>';
   area.innerHTML = banner + _subtabs +
     `<div class="srow" style="margin-bottom:14px;flex-wrap:wrap;gap:6px">
       <div class="pill"><strong>${_view.length}</strong> Ranging</div>
@@ -6554,20 +6542,15 @@ function rsPAT() {
     const _pAth   = results.filter(r => classifyBreakout(r,'') === 'ath_momentum');
     const _pSwing = results.filter(r => classifyBreakout(r,'') === 'swing');
     const _pView  = SC_VIEW === 'ath' ? _pAth : _pSwing;
-    const _pSubtabs = `
-      <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
-        <button onclick="SC_VIEW='swing';rsPAT()" style="flex:1;padding:6px;font-size:.68rem;font-weight:800;cursor:pointer;border:none;
-                 background:\${SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
-                 color:\${SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
-          ⚡ Swing (\${_pSwing.length})
-        </button>
-        <button onclick="SC_VIEW='ath';rsPAT()" style="flex:1;padding:6px;font-size:.68rem;font-weight:800;cursor:pointer;border:none;
-                 background:\${SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
-                 color:\${SC_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
-          🚀 ATH (\${_pAth.length})
-        </button>
-      </div>`;
-    resEl.innerHTML = _pSubtabs + `<div class="grid">${_pView.slice(0, 40).map(s => patCardHTML(s, mode, mi)).join('')}</div>`;
+    const swingBg = SC_VIEW==='swing' ? 'rgba(168,85,247,.2)' : 'var(--card2)';
+    const swingCl = SC_VIEW==='swing' ? '#f5d0fe' : 'var(--muted2)';
+    const athBg   = SC_VIEW==='ath'   ? 'rgba(245,197,24,.15)' : 'var(--card2)';
+    const athCl   = SC_VIEW==='ath'   ? '#fde68a' : 'var(--muted2)';
+    const _pSubtabs = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
+      + '<button onclick="SC_VIEW=\'swing\';rsPAT()" style="flex:1;padding:6px;font-size:.68rem;font-weight:800;cursor:pointer;border:none;background:'+swingBg+';color:'+swingCl+';border-right:1px solid var(--border2)">⚡ Swing ('+_pSwing.length+')</button>'
+      + '<button onclick="SC_VIEW=\'ath\';rsPAT()" style="flex:1;padding:6px;font-size:.68rem;font-weight:800;cursor:pointer;border:none;background:'+athBg+';color:'+athCl+'">🚀 ATH ('+_pAth.length+')</button>'
+      + '</div>';
+    resEl.innerHTML = _pSubtabs + '<div class="grid">' + _pView.slice(0,40).map(s => patCardHTML(s, mode, mi)).join('') + '</div>';
   }, 40);
 }
 
@@ -10409,47 +10392,73 @@ function classifyBreakout(s, patternType) {
 
 // ── 1. W Pattern / Double Bottom ──────────────────────────────────────────────
 function detectWPattern(s) {
+  // W Pattern / Double Bottom — rebuilt for real swing trade detection
+  // Scans 3 years back. Catches deep bases like DEEPAKNITR, ALKYLAMINE.
+  // Two lows within 15% of each other, meaningful correction, neckline breakout.
   const wk = s.weekly;
-  if (!wk || wk.length < 8) return null;
-  const n = wk.length;
-  const lows = wk.map(b => b.l), closes = wk.map(b => b.c), highs = wk.map(b => b.h);
-  const price = closes[n-1];
+  if (!wk || wk.length < 20) return null;
+  const n      = wk.length;
+  const lows   = wk.map(b => b.l);
+  const closes = wk.map(b => b.c);
+  const highs  = wk.map(b => b.h);
+  const price  = closes[n-1];
+  const allTimeHigh = Math.max(...closes);
   let best = null;
-  for (let i = Math.max(1, n-30); i < n-5; i++) {
+  const scanStart = Math.max(1, n - 150); // 3-year lookback
+
+  for (let i = scanStart; i < n - 10; i++) {
     const lo1 = lows[i];
-    for (let j = i+1; j < Math.min(i+20, n-2); j++) {
+    for (let j = i + 8; j < Math.min(i + 100, n - 2); j++) {
       const lo2 = lows[j];
-      const pct = Math.abs(lo1-lo2)/Math.min(lo1,lo2);
-      if (pct > 0.05) continue;
+      // 15% tolerance — real markets don't make perfect W
+      if (Math.abs(lo1 - lo2) / Math.min(lo1, lo2) > 0.15) continue;
+      // Find neckline = highest high between the two lows
       let neckline = 0;
-      for (let k = i+1; k < j; k++) neckline = Math.max(neckline, highs[k]);
-      if (neckline <= lo1) continue;
+      for (let k = i + 1; k < j; k++) neckline = Math.max(neckline, highs[k]);
+      if (neckline <= Math.max(lo1, lo2) * 1.05) continue;
+      // Must have corrected at least 20% from peak before the base
+      const peakBefore   = Math.max(...closes.slice(Math.max(0, i - 30), i + 1));
+      const corrPct      = peakBefore > 0 ? (peakBefore - Math.min(lo1,lo2)) / peakBefore * 100 : 0;
+      if (corrPct < 20) continue;
+      // Breakout check: broke neckline within last 12 weeks, OR approaching it (within 5%)
       let breakoutBar = -1;
-      for (let k = j+1; k < n; k++) { if (closes[k] > neckline) { breakoutBar = k; break; } }
-      if (breakoutBar < 0) continue;
-      const barsAfterBO = n-1-breakoutBar;
-      if (barsAfterBO > 4) continue;
-      const lo2Higher = lo2 > lo1;
-      const bodySize  = Math.abs(closes[breakoutBar]-wk[breakoutBar].o);
-      const avgBody   = wk.slice(-12).reduce((a,b)=>a+Math.abs(b.c-b.o),0)/12;
-      const volRatio  = s.volRatio||1;
-      const depthPct  = (neckline-Math.min(lo1,lo2))/neckline*100;
-      let score = 55;
-      score += lo2Higher?10:0; score += bodySize>avgBody*1.3?8:0;
-      score += volRatio>1.5?8:0; score += barsAfterBO===0?10:barsAfterBO<=2?5:0;
-      score += (j-i)<=8?5:0; score += depthPct>10?5:0;
-      score += s.rsi>50&&s.rsi<75?5:0; score += s.e20&&price>s.e20?4:0;
-      score = Math.min(100,score);
-      if (!best||score>best.score) best={
-        type:'W Pattern',icon:'〰️',score,neckline:+neckline.toFixed(2),
-        lo1:+lo1.toFixed(2),lo2:+lo2.toFixed(2),barsAfterBO,depthPct:+depthPct.toFixed(1),
-        detail:`Double bottom ₹${lo1.toFixed(0)}–₹${lo2.toFixed(0)} · neckline ₹${neckline.toFixed(0)} · broke out ${barsAfterBO===0?'this week':barsAfterBO+'wk ago'}`,
-        keyLevel:+neckline.toFixed(2),pattern_bars:wk.slice(Math.max(0,i-2),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c})),
+      for (let k = j + 1; k < n; k++) { if (closes[k] > neckline) { breakoutBar = k; break; } }
+      const barsAfterBO   = breakoutBar >= 0 ? n - 1 - breakoutBar : -1;
+      const setupForming  = breakoutBar < 0 && (neckline - price) / neckline * 100 <= 5;
+      if (breakoutBar >= 0 && barsAfterBO > 12) continue; // too old
+      if (breakoutBar < 0 && !setupForming)     continue; // no breakout and not near
+      // Score
+      const baseDuration = j - i;
+      const lo2Higher    = lo2 > lo1;
+      const volRatio     = s.volRatio || 1;
+      let score = 50;
+      score += corrPct > 50 ? 12 : corrPct > 35 ? 8 : corrPct > 20 ? 4 : 0;
+      score += baseDuration > 52 ? 15 : baseDuration > 26 ? 10 : baseDuration > 12 ? 5 : 0;
+      score += lo2Higher ? 10 : 0;
+      score += barsAfterBO === 0 ? 12 : barsAfterBO <= 2 ? 10 : barsAfterBO <= 6 ? 6 : barsAfterBO <= 12 ? 3 : 0;
+      score += setupForming ? 8 : 0;
+      score += volRatio > 1.5 ? 8 : volRatio > 1.2 ? 4 : 0;
+      score += s.rsi > 50 && s.rsi < 75 ? 5 : 0;
+      score += s.e20 && price > s.e20 ? 4 : 0;
+      score += price < allTimeHigh * 0.85 ? 5 : 0; // below ATH = swing trade upside
+      score = Math.min(100, score);
+      const statusText = setupForming
+        ? `approaching neckline ₹${neckline.toFixed(0)} (setup forming)`
+        : barsAfterBO === 0 ? `broke neckline ₹${neckline.toFixed(0)} this week`
+        : `broke neckline ${barsAfterBO}wk ago`;
+      if (!best || score > best.score) best = {
+        type:'W Pattern', icon:'〰️', score,
+        neckline:+neckline.toFixed(2), lo1:+lo1.toFixed(2), lo2:+lo2.toFixed(2),
+        barsAfterBO, setupForming, baseDuration, corrPct:+corrPct.toFixed(1),
+        keyLevel:+neckline.toFixed(2),
+        detail:`Base ${baseDuration}wk · fell ${corrPct.toFixed(0)}% · lows ₹${Math.min(lo1,lo2).toFixed(0)}/₹${Math.max(lo1,lo2).toFixed(0)} · ${statusText}`,
+        pattern_bars: wk.slice(Math.max(0, i - 3), n).map(b => ({o:b.o,h:b.h,l:b.l,c:b.c})),
       };
     }
   }
   return best;
 }
+
 
 // ── 2. Weekly Resistance Breakout ─────────────────────────────────────────────
 function detectWeeklyBreakout(s) {
@@ -10513,30 +10522,79 @@ function detectMonthlyBreakout(s) {
 
 // ── 4. Momentum Shift ─────────────────────────────────────────────────────────
 function detectMomentumShift(s) {
-  const wk=s.weekly;
-  if (!wk||wk.length<14) return null;
-  const n=wk.length, price=wk[n-1].c;
-  const recentBodies=[0,1].map(i=>Math.abs(wk[n-1-i].c-wk[n-1-i].o));
-  const priorBodies=wk.slice(n-10,n-2).map(b=>Math.abs(b.c-b.o));
-  const avgPrior=priorBodies.reduce((a,b)=>a+b,0)/priorBodies.length||1;
-  const avgRecent=recentBodies.reduce((a,b)=>a+b,0)/recentBodies.length;
-  const expansion=avgRecent/avgPrior;
-  if (expansion<1.8) return null;
-  if (!(wk[n-1].c>wk[n-1].o&&wk[n-2].c>wk[n-2].o)) return null;
-  const recentCloses=wk.slice(-25).map(b=>b.c);
-  const k=2/21; let e=recentCloses[0];
-  recentCloses.forEach(c=>e=c*k+e*(1-k));
-  const aboveEMA=price>e;
-  const wasQuiet=wk.slice(n-12,n-2).map(b=>Math.abs(b.c-b.o)).filter(b=>b<avgPrior*0.8).length>=4;
-  let score=52;
-  score+=expansion>3?15:expansion>2.5?10:5; score+=aboveEMA?8:0;
-  score+=wasQuiet?8:0; score+=(s.volRatio||1)>2?8:(s.volRatio||1)>1.5?4:0;
-  score+=s.rsi>55&&s.rsi<80?6:0; score=Math.min(100,score);
-  return {type:'Momentum Shift',icon:'⚡',score,expansion:+expansion.toFixed(1),aboveEMA,wasQuiet,
-    keyLevel:+e.toFixed(2),
-    detail:`Weekly bodies ${expansion.toFixed(1)}x larger · ${wasQuiet?'broke compression':' accelerating'} · ${aboveEMA?'above EMA20':'watch EMA20'}`,
-    pattern_bars:wk.slice(Math.max(0,n-14),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+  // Momentum Shift — rebuilt for Image 1 pattern:
+  // Long quiet/flat period (6+ months of tiny bodies) → sudden large candles
+  // Like the chart: slow drift up with tiny candles, then explosive expansion
+  const wk = s.weekly;
+  if (!wk || wk.length < 26) return null;
+  const n     = wk.length;
+  const price = wk[n-1].c;
+
+  // Compute body sizes
+  const bodies = wk.map(b => Math.abs(b.c - b.o));
+
+  // Recent = last 3 weeks (the explosive move)
+  const recentBodies = bodies.slice(-3);
+  const avgRecent    = recentBodies.reduce((a,b)=>a+b,0) / recentBodies.length;
+
+  // Quiet period = 8-26 weeks before the recent move (the base/compression)
+  // Use weeks 4-26 before current (skip last 3 to isolate the move)
+  const quietBodies  = bodies.slice(Math.max(0, n - 26), n - 3);
+  const avgQuiet     = quietBodies.reduce((a,b)=>a+b,0) / quietBodies.length || 1;
+
+  // Key condition: recent bodies must be MUCH larger than the quiet period
+  const expansion = avgRecent / avgQuiet;
+  if (expansion < 2.0) return null; // need at least 2x expansion
+
+  // Recent candles should be predominantly bullish (at least 2 of 3)
+  const recentBull = wk.slice(-3).filter(b => b.c > b.o).length;
+  if (recentBull < 2) return null;
+
+  // The quiet period should actually be quiet (low volatility)
+  // Measure: what % of quiet bars had body < 1.5x average quiet body
+  const quietCount = quietBodies.filter(b => b <= avgQuiet * 1.5).length;
+  const wasQuiet   = quietCount >= quietBodies.length * 0.6; // 60%+ of bars were quiet
+
+  // Price trend during quiet period (should be flat or mildly up — not falling)
+  const quietStart = wk[Math.max(0, n - 26)].c;
+  const quietEnd   = wk[n - 4].c;
+  const quietTrend = quietStart > 0 ? (quietEnd - quietStart) / quietStart * 100 : 0;
+  if (quietTrend < -15) return null; // was falling hard — not a base
+
+  // EMA check
+  const k = 2/21; let ema21 = wk[0].c;
+  wk.forEach(b => ema21 = b.c*k + ema21*(1-k));
+  const aboveEMA = price > ema21;
+
+  // How long was the quiet period (more weeks = more coiled energy)
+  const quietWeeks = Math.min(quietBodies.length, 26);
+
+  const volRatio = s.volRatio || 1;
+
+  let score = 52;
+  score += expansion > 4 ? 18 : expansion > 3 ? 12 : expansion > 2.5 ? 8 : 4;
+  score += wasQuiet ? 12 : 0;
+  score += quietWeeks > 20 ? 10 : quietWeeks > 12 ? 6 : 3;
+  score += aboveEMA ? 6 : 0;
+  score += volRatio > 2 ? 8 : volRatio > 1.5 ? 4 : 0;
+  score += s.rsi > 55 && s.rsi < 82 ? 6 : 0;
+  score += recentBull === 3 ? 5 : 0; // all 3 recent candles bullish
+  score = Math.min(100, score);
+
+  return {
+    type:      'Momentum Shift',
+    icon:      '⚡',
+    score,
+    expansion: +expansion.toFixed(1),
+    quietWeeks,
+    aboveEMA,
+    wasQuiet,
+    keyLevel:  +ema21.toFixed(2),
+    detail:    `${quietWeeks}wk quiet base · bodies expanded ${expansion.toFixed(1)}x · ${wasQuiet?'compressed then exploded':'accelerating'} · ${recentBull}/3 recent candles bullish`,
+    pattern_bars: wk.slice(Math.max(0, n - 20), n).map(b => ({o:b.o,h:b.h,l:b.l,c:b.c})),
+  };
 }
+
 
 // ── 5. Cup & Handle ───────────────────────────────────────────────────────────
 function detectCupHandle(s) {
@@ -10775,15 +10833,47 @@ let BK_PHASE_DONE = { p1:false, p2:false, p3:false };
 
 // ── Pre-filter: cheap check ───────────────────────────────────────────────────
 function bkIsCandidate(s) {
-  if (!s.weekly || s.weekly.length < 8) return false;
-  const wk=s.weekly, n=wk.length, c=wk[n-1].c;
-  const hi52=s.h52||Math.max(...wk.slice(-52).map(b=>b.h));
-  const nearHigh  = hi52>0 && c>=hi52*0.82;
-  const momentum  = (s.weekChg||0)>1.5;
-  const volSurge  = (s.volRatio||1)>=1.4;
-  const prev3     = wk[n-4]?.c||c;
-  const recentMove= prev3>0 && (c-prev3)/prev3*100>2.5;
-  return nearHigh||momentum||volSurge||recentMove;
+  // Pre-filter: exclude stocks with clearly no setup
+  // Intentionally broad — pattern detectors apply their own strict rules
+  // Must have weekly data
+  if (!s.weekly || s.weekly.length < 16) return false;
+  const wk = s.weekly, n = wk.length, c = wk[n-1].c;
+
+  // 1. Near 52-week high (within 20%) — breakout/momentum candidates
+  const hi52 = s.h52 || Math.max(...wk.slice(-52).map(b=>b.h));
+  if (hi52 > 0 && c >= hi52 * 0.80) return true;
+
+  // 2. Weekly momentum
+  if ((s.weekChg||0) > 1.2) return true;
+
+  // 3. Volume surge
+  if ((s.volRatio||1) >= 1.3) return true;
+
+  // 4. Recent 3-week move
+  const prev3 = wk[n-4]?.c || c;
+  if (prev3 > 0 && (c - prev3) / prev3 * 100 > 2) return true;
+
+  // 5. W Pattern candidate: check if stock has been in a long base
+  // (corrected 25%+ from its own 2-year high and now showing signs of life)
+  if (wk.length >= 52) {
+    const hi2y = Math.max(...wk.slice(-104).map(b=>b.h));
+    const corr = hi2y > 0 ? (hi2y - c) / hi2y * 100 : 0;
+    // Deep correction + any recent positive weekly = W pattern candidate
+    if (corr >= 25 && (s.weekChg||0) > 0) return true;
+    // Deep correction + approaching prior resistance = setup forming
+    if (corr >= 25 && corr <= 50) return true;
+  }
+
+  // 6. Momentum shift candidate: check if recent candles are expanding
+  if (wk.length >= 16) {
+    const recentBodies = [0,1,2].map(i => Math.abs(wk[n-1-i].c - wk[n-1-i].o));
+    const priorBodies  = wk.slice(n-16, n-3).map(b => Math.abs(b.c-b.o));
+    const avgPrior     = priorBodies.reduce((a,b)=>a+b,0)/priorBodies.length || 1;
+    const avgRecent    = recentBodies.reduce((a,b)=>a+b,0)/3;
+    if (avgRecent / avgPrior > 1.8) return true;
+  }
+
+  return false;
 }
 
 // ── Chunked async scanner — processes 25 stocks per frame ────────────────────
@@ -10944,14 +11034,11 @@ function sgBreakouts(ctrl) {
       </button>
     </div>
 
-    <!-- Pattern filter -->
-    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">
-      ${[['all','🔥 All'],['wpattern','〰️ W'],['weekly','📈 Wk'],['monthly','🗓️ Mo'],
-         ['momentum','⚡ Mom'],['cup','☕ C&H'],['vcp','🔺 VCP'],
-         ['inside','📦 IB'],['52w','🏔️ 52W'],['multiyear','🚀 MY'],
-         ['gap','💥 Gap'],['stage2','📊 S2']]
+    <!-- Pattern filter — simplified -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      ${[['all','🔥 All'],['wpattern','〰️ W Pattern'],['weekly','📈 Weekly BO'],['monthly','🗓️ Monthly BO'],['momentum','⚡ Momentum']]
         .map(([k,l]) => `<button onclick="BK_FILTER='${k}';bkRefreshUI()"
-          style="padding:4px 9px;border-radius:16px;font-size:.62rem;font-weight:700;cursor:pointer;
+          style="padding:5px 13px;border-radius:16px;font-size:.68rem;font-weight:700;cursor:pointer;
                  border:1px solid ${BK_FILTER===k?'#a855f7':'var(--border2)'};
                  background:${BK_FILTER===k?'rgba(168,85,247,.18)':'var(--card2)'};
                  color:${BK_FILTER===k?'#f5d0fe':'var(--muted2)'}">${l}</button>`).join('')}
