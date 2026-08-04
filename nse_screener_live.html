@@ -2377,7 +2377,8 @@ function bgBadge(loading, pct, total, label){
   }
   if(!loading){el.style.opacity='0';setTimeout(()=>el.remove(),500);return;}
   el.style.opacity='1';
-  el.innerHTML=`<div style="width:8px;height:8px;border-radius:50%;background:var(--yellow);animation:pulse 1s infinite"></div>⏳ Loading ${label}${pct!==undefined?' ('+pct+'%)':''}${total?' · '+total+' stocks':''}`;
+  const dotColor = label&&label.includes('Universe') ? '#fb923c' : 'var(--yellow)';
+  el.innerHTML=`<div style="width:8px;height:8px;border-radius:50%;background:${dotColor};animation:pulse 1s infinite"></div><span style="color:${dotColor}">⏳ Loading ${label}</span>${pct!==undefined?' ('+pct+'%)':''}${total?' · '+total+' stocks':''}`;
 }
 
 function startARI(){if(ALI)clearInterval(ALI);ALI=setInterval(chkAlerts,30000);}
@@ -10266,252 +10267,644 @@ function detectMomentumShift(s) {
 }
 
 // ── Run all detectors on a stock ───────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATTERN DETECTORS — expanded set
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── ATH Classification ────────────────────────────────────────────────────────
+// Returns: 'ath_momentum' | 'swing'
+// ath_momentum = broke ATH and kept running (no 2wk+ wait)
+// swing        = local breakout OR broke ATH after 2+ week consolidation/wait
+function classifyBreakout(s, patternType) {
+  const wk = s.weekly;
+  if (!wk || wk.length < 4) return 'swing';
+  const n  = wk.length;
+  const c  = wk[n-1].c;
+
+  // All-time high from full daily history
+  const ath = s.daily && s.daily.c && s.daily.c.length > 0
+    ? Math.max(...s.daily.c)
+    : Math.max(...wk.map(b => b.h));
+
+  // Is current price within 3% of ATH?
+  const nearATH = ath > 0 && c >= ath * 0.97;
+  if (!nearATH) return 'swing'; // clearly not ATH — swing
+
+  // Find when ATH was last set (which week)
+  const athWeekIdx = wk.reduce((bi, b, i) => b.h > wk[bi].h ? i : bi, 0);
+  const wksAgoATH  = n - 1 - athWeekIdx;
+
+  if (wksAgoATH <= 2) {
+    // ATH was set in last 2 weeks — check if it's been continuous momentum
+    // (no significant pullback > 3% between ATH and now)
+    const sliceAfterATH = wk.slice(athWeekIdx);
+    const maxPullback   = sliceAfterATH.reduce((mx, b, i) => {
+      if (i === 0) return 0;
+      const prev = sliceAfterATH[i-1].c;
+      return Math.max(mx, prev > 0 ? (prev - b.l) / prev * 100 : 0);
+    }, 0);
+    if (maxPullback < 3) return 'ath_momentum'; // clean continuous run
+  }
+  // ATH was 2+ weeks ago OR had a pullback after ATH → swing
+  return 'swing';
+}
+
+// ── 1. W Pattern / Double Bottom ──────────────────────────────────────────────
+function detectWPattern(s) {
+  const wk = s.weekly;
+  if (!wk || wk.length < 8) return null;
+  const n = wk.length;
+  const lows = wk.map(b => b.l), closes = wk.map(b => b.c), highs = wk.map(b => b.h);
+  const price = closes[n-1];
+  let best = null;
+  for (let i = Math.max(1, n-30); i < n-5; i++) {
+    const lo1 = lows[i];
+    for (let j = i+1; j < Math.min(i+20, n-2); j++) {
+      const lo2 = lows[j];
+      const pct = Math.abs(lo1-lo2)/Math.min(lo1,lo2);
+      if (pct > 0.05) continue;
+      let neckline = 0;
+      for (let k = i+1; k < j; k++) neckline = Math.max(neckline, highs[k]);
+      if (neckline <= lo1) continue;
+      let breakoutBar = -1;
+      for (let k = j+1; k < n; k++) { if (closes[k] > neckline) { breakoutBar = k; break; } }
+      if (breakoutBar < 0) continue;
+      const barsAfterBO = n-1-breakoutBar;
+      if (barsAfterBO > 4) continue;
+      const lo2Higher = lo2 > lo1;
+      const bodySize  = Math.abs(closes[breakoutBar]-wk[breakoutBar].o);
+      const avgBody   = wk.slice(-12).reduce((a,b)=>a+Math.abs(b.c-b.o),0)/12;
+      const volRatio  = s.volRatio||1;
+      const depthPct  = (neckline-Math.min(lo1,lo2))/neckline*100;
+      let score = 55;
+      score += lo2Higher?10:0; score += bodySize>avgBody*1.3?8:0;
+      score += volRatio>1.5?8:0; score += barsAfterBO===0?10:barsAfterBO<=2?5:0;
+      score += (j-i)<=8?5:0; score += depthPct>10?5:0;
+      score += s.rsi>50&&s.rsi<75?5:0; score += s.e20&&price>s.e20?4:0;
+      score = Math.min(100,score);
+      if (!best||score>best.score) best={
+        type:'W Pattern',icon:'〰️',score,neckline:+neckline.toFixed(2),
+        lo1:+lo1.toFixed(2),lo2:+lo2.toFixed(2),barsAfterBO,depthPct:+depthPct.toFixed(1),
+        detail:`Double bottom ₹${lo1.toFixed(0)}–₹${lo2.toFixed(0)} · neckline ₹${neckline.toFixed(0)} · broke out ${barsAfterBO===0?'this week':barsAfterBO+'wk ago'}`,
+        keyLevel:+neckline.toFixed(2),pattern_bars:wk.slice(Math.max(0,i-2),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c})),
+      };
+    }
+  }
+  return best;
+}
+
+// ── 2. Weekly Resistance Breakout ─────────────────────────────────────────────
+function detectWeeklyBreakout(s) {
+  const wk = s.weekly;
+  if (!wk||wk.length<12) return null;
+  const n=wk.length, closes=wk.map(b=>b.c), price=closes[n-1];
+  const lookback=wk.slice(Math.max(0,n-52),n-4);
+  if (lookback.length<6) return null;
+  const resistance=Math.max(...lookback.map(b=>b.c));
+  const resBar=wk.findIndex(b=>b.c===resistance);
+  const weeksHeld=n-1-resBar;
+  if (weeksHeld<4) return null;
+  const thisWeek=closes[n-1]>resistance;
+  const lastWeek=closes[n-2]>resistance&&closes[n-3]<=resistance;
+  if (!thisWeek&&!lastWeek) return null;
+  const barsAfterBO=thisWeek?0:1;
+  const volRatio=s.volRatio||1;
+  const boStrength=(price-resistance)/resistance*100;
+  let score=55;
+  score+=weeksHeld>26?15:weeksHeld>12?8:3;
+  score+=volRatio>2?15:volRatio>1.5?8:0;
+  score+=barsAfterBO===0?10:4; score+=boStrength>2?5:0;
+  score+=s.rsi>55&&s.rsi<80?5:0; score=Math.min(100,score);
+  return {type:'Weekly Breakout',icon:'📈',score,resistance:+resistance.toFixed(2),weeksHeld,barsAfterBO,
+    boStrength:+boStrength.toFixed(1),keyLevel:+resistance.toFixed(2),
+    detail:`Resistance ₹${resistance.toFixed(0)} held ${weeksHeld}wk · broke ${barsAfterBO===0?'this week':'1wk ago'} · +${boStrength.toFixed(1)}%`,
+    pattern_bars:wk.slice(Math.max(0,n-16),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── 3. Monthly Resistance Breakout ────────────────────────────────────────────
+function detectMonthlyBreakout(s) {
+  if (!s.daily||!s.daily.c||s.daily.c.length<63) return null;
+  const {c,h,l,o}=s.daily; const n=c.length;
+  const monthly=[];
+  for (let i=0;i+20<n;i+=21) {
+    const sc=c.slice(i,i+21),sh=h.slice(i,i+21),sl=l.slice(i,i+21),so=o.slice(i,i+21);
+    monthly.push({o:so[0],h:Math.max(...sh),l:Math.min(...sl),c:sc[sc.length-1]});
+  }
+  if (monthly.length<6) return null;
+  const mn=monthly.length, mc=monthly.map(b=>b.c), price=mc[mn-1];
+  const lookback=monthly.slice(Math.max(0,mn-24),mn-2);
+  if (lookback.length<3) return null;
+  const resistance=Math.max(...lookback.map(b=>b.c));
+  const resBar=monthly.findIndex(b=>b.c===resistance);
+  const monthsHeld=mn-1-resBar;
+  if (monthsHeld<2) return null;
+  const thisMonth=mc[mn-1]>resistance, lastMonth=mc[mn-2]>resistance&&mc[mn-3]<=resistance;
+  if (!thisMonth&&!lastMonth) return null;
+  const barsAfterBO=thisMonth?0:1;
+  const boStrength=(price-resistance)/resistance*100;
+  let score=60;
+  score+=monthsHeld>12?15:monthsHeld>6?8:3;
+  score+=(s.volRatio||1)>2?12:(s.volRatio||1)>1.5?6:0;
+  score+=barsAfterBO===0?10:4; score+=boStrength>3?8:boStrength>1?4:0;
+  score+=s.rsi>55&&s.rsi<82?5:0; score=Math.min(100,score);
+  return {type:'Monthly Breakout',icon:'🗓️',score,resistance:+resistance.toFixed(2),monthsHeld,barsAfterBO,
+    boStrength:+boStrength.toFixed(1),keyLevel:+resistance.toFixed(2),
+    detail:`Monthly res ₹${resistance.toFixed(0)} held ${monthsHeld}mo · broke ${barsAfterBO===0?'this month':'last month'} · +${boStrength.toFixed(1)}%`,
+    pattern_bars:monthly.slice(Math.max(0,mn-10),mn).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── 4. Momentum Shift ─────────────────────────────────────────────────────────
+function detectMomentumShift(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<14) return null;
+  const n=wk.length, price=wk[n-1].c;
+  const recentBodies=[0,1].map(i=>Math.abs(wk[n-1-i].c-wk[n-1-i].o));
+  const priorBodies=wk.slice(n-10,n-2).map(b=>Math.abs(b.c-b.o));
+  const avgPrior=priorBodies.reduce((a,b)=>a+b,0)/priorBodies.length||1;
+  const avgRecent=recentBodies.reduce((a,b)=>a+b,0)/recentBodies.length;
+  const expansion=avgRecent/avgPrior;
+  if (expansion<1.8) return null;
+  if (!(wk[n-1].c>wk[n-1].o&&wk[n-2].c>wk[n-2].o)) return null;
+  const recentCloses=wk.slice(-25).map(b=>b.c);
+  const k=2/21; let e=recentCloses[0];
+  recentCloses.forEach(c=>e=c*k+e*(1-k));
+  const aboveEMA=price>e;
+  const wasQuiet=wk.slice(n-12,n-2).map(b=>Math.abs(b.c-b.o)).filter(b=>b<avgPrior*0.8).length>=4;
+  let score=52;
+  score+=expansion>3?15:expansion>2.5?10:5; score+=aboveEMA?8:0;
+  score+=wasQuiet?8:0; score+=(s.volRatio||1)>2?8:(s.volRatio||1)>1.5?4:0;
+  score+=s.rsi>55&&s.rsi<80?6:0; score=Math.min(100,score);
+  return {type:'Momentum Shift',icon:'⚡',score,expansion:+expansion.toFixed(1),aboveEMA,wasQuiet,
+    keyLevel:+e.toFixed(2),
+    detail:`Weekly bodies ${expansion.toFixed(1)}x larger · ${wasQuiet?'broke compression':' accelerating'} · ${aboveEMA?'above EMA20':'watch EMA20'}`,
+    pattern_bars:wk.slice(Math.max(0,n-14),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── 5. Cup & Handle ───────────────────────────────────────────────────────────
+function detectCupHandle(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<16) return null;
+  const n=wk.length, closes=wk.map(b=>b.c), highs=wk.map(b=>b.h);
+  const price=closes[n-1];
+  // Cup: find left high, deep low, right high (both sides within 5% of each other)
+  for (let i=Math.max(0,n-52); i<n-12; i++) {
+    const leftHigh=closes[i];
+    // Find the bottom of the cup (at least 15% below left high)
+    let cupLow=leftHigh, cupLowIdx=i;
+    for (let j=i+3; j<n-4; j++) {
+      if (closes[j]<cupLow) { cupLow=closes[j]; cupLowIdx=j; }
+      else if (cupLow<leftHigh*0.85 && j>cupLowIdx+3) {
+        // Right side forming — check right high
+        const rightHigh=Math.max(...closes.slice(cupLowIdx,j+1));
+        const rimMatch=Math.abs(rightHigh-leftHigh)/leftHigh<0.06;
+        if (!rimMatch) continue;
+        // Handle: last 3-8 bars tighter range above cup low
+        const handleBars=closes.slice(j,n);
+        if (handleBars.length<2) continue;
+        const handleLow=Math.min(...handleBars);
+        const handleHigh=Math.max(...handleBars);
+        const handleTight=(handleHigh-handleLow)/handleLow<0.08;
+        const breakingHandle=price>handleHigh*0.99;
+        if (!handleTight||!breakingHandle) continue;
+        const depthPct=(leftHigh-cupLow)/leftHigh*100;
+        const cupLen=j-i;
+        let score=60;
+        score+=depthPct>20&&depthPct<50?12:depthPct>12?6:0;
+        score+=cupLen>8&&cupLen<40?10:5; score+=handleTight?8:0;
+        score+=(s.volRatio||1)>1.5?8:0; score+=s.rsi>50&&s.rsi<78?6:0;
+        score=Math.min(100,score);
+        return {type:'Cup & Handle',icon:'☕',score,rimLevel:+leftHigh.toFixed(2),
+          cupDepth:+depthPct.toFixed(1),cupLen,keyLevel:+handleHigh.toFixed(2),
+          detail:`Cup ${cupLen}wk deep · ${depthPct.toFixed(0)}% depth · handle tight · breaking out`,
+          pattern_bars:wk.slice(Math.max(0,i-1),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+      }
+    }
+  }
+  return null;
+}
+
+// ── 6. VCP (Volatility Contraction Pattern) ───────────────────────────────────
+function detectVCP(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<12) return null;
+  const n=wk.length;
+  const last12=wk.slice(n-12);
+  // Compute weekly ranges — looking for contracting volatility
+  const ranges=last12.map(b=>(b.h-b.l)/b.l*100);
+  const avg6=ranges.slice(0,6).reduce((a,b)=>a+b,0)/6;
+  const avg3=ranges.slice(9).reduce((a,b)=>a+b,0)/3;
+  if (avg3>=avg6*0.65) return null; // not contracting enough
+  // Price should be in uptrend (above EMA20)
+  const closes=wk.slice(-25).map(b=>b.c);
+  const k=2/21; let e=closes[0];
+  closes.forEach(c=>e=c*k+e*(1-k));
+  const price=wk[n-1].c;
+  if (price<e*0.97) return null; // below EMA
+  // Last bar should show expansion (range increasing = breakout starting)
+  const lastRange=ranges[ranges.length-1];
+  const prevAvgRange=ranges.slice(ranges.length-4,ranges.length-1).reduce((a,b)=>a+b,0)/3;
+  const expanding=lastRange>prevAvgRange*1.2;
+  const contraction=+(avg3/avg6*100).toFixed(0);
+  let score=58;
+  score+=contraction<50?15:contraction<60?8:3;
+  score+=expanding?12:0; score+=price>e?8:0;
+  score+=(s.volRatio||1)>1.5?8:0; score+=s.rsi>52&&s.rsi<78?6:0;
+  score=Math.min(100,score);
+  return {type:'VCP',icon:'🔺',score,contraction,expanding,ema20:+e.toFixed(2),
+    keyLevel:+Math.max(...wk.slice(n-4).map(b=>b.h)).toFixed(2),
+    detail:`Volatility contracted to ${contraction}% of prior · ${expanding?'expanding now (breakout)':'tightening'} · EMA20 ₹${e.toFixed(0)}`,
+    pattern_bars:last12.map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── 7. Inside Bar Breakout ────────────────────────────────────────────────────
+function detectInsideBarBreakout(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<10) return null;
+  const n=wk.length;
+  // Look for mother bar + 1-3 inside bars + breakout above mother bar high
+  for (let i=Math.max(1,n-15); i<n-2; i++) {
+    const mb=wk[i]; const mbBody=mb.c-mb.o;
+    if (mbBody<0) continue; // mother bar must be bullish
+    const mbRange=mb.h-mb.l; if (mbRange<=0) continue;
+    if (mbBody/mbRange<0.4) continue; // body must be >40% of range
+    let insideCount=0;
+    for (let j=i+1; j<n-1; j++) {
+      if (wk[j].h<=mb.h&&wk[j].l>=mb.l) insideCount++;
+      else break;
+    }
+    if (insideCount<1||insideCount>4) continue;
+    // Current bar breaking above mother high
+    const breakBar=i+insideCount+1;
+    if (breakBar>=n) continue;
+    const breaking=wk[n-1].c>mb.h;
+    const breakRecent=n-1-breakBar<=2;
+    if (!breaking||!breakRecent) continue;
+    const volRatio=s.volRatio||1;
+    let score=60;
+    score+=insideCount>=2?10:5; score+=volRatio>1.5?10:0;
+    score+=s.rsi>52&&s.rsi<78?8:0; score+=(n-1-breakBar)===0?10:5;
+    score=Math.min(100,score);
+    return {type:'Inside Bar BO',icon:'📦',score,motherHigh:+mb.h.toFixed(2),
+      insideCount,keyLevel:+mb.h.toFixed(2),
+      detail:`${insideCount} inside bar${insideCount>1?'s':''} after bullish mother · breaking above ₹${mb.h.toFixed(0)}`,
+      pattern_bars:wk.slice(Math.max(0,i-1),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+  }
+  return null;
+}
+
+// ── 8. 52W High Breakout ──────────────────────────────────────────────────────
+function detect52WBreakout(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<20) return null;
+  const n=wk.length, closes=wk.map(b=>b.c), price=closes[n-1];
+  const hi52=Math.max(...closes.slice(Math.max(0,n-52),n-2));
+  const prev52=Math.max(...closes.slice(Math.max(0,n-52),n-4));
+  if (price<=hi52*0.99) return null; // not breaking
+  const breakthrough=closes[n-2]<=prev52||closes[n-3]<=prev52;
+  if (!breakthrough) return null; // must be fresh break
+  const volRatio=s.volRatio||1;
+  const boStrength=(price-hi52)/hi52*100;
+  let score=65;
+  score+=volRatio>2?12:volRatio>1.5?7:0; score+=boStrength>2?8:3;
+  score+=s.rsi>55&&s.rsi<82?6:0; score=Math.min(100,score);
+  return {type:'52W High Break',icon:'🏔️',score,hi52:+hi52.toFixed(2),
+    boStrength:+boStrength.toFixed(1),keyLevel:+hi52.toFixed(2),
+    detail:`Breaking 52-week high ₹${hi52.toFixed(0)} · +${boStrength.toFixed(1)}% above · vol ${volRatio.toFixed(1)}x`,
+    pattern_bars:wk.slice(Math.max(0,n-16),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── 9. Multi-Year High Breakout ────────────────────────────────────────────────
+function detectMultiYearBreakout(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<104) return null; // need 2+ years
+  const n=wk.length, closes=wk.map(b=>b.c), price=closes[n-1];
+  const hi2y=Math.max(...closes.slice(Math.max(0,n-104),n-2));
+  if (price<=hi2y*0.99) return null;
+  const weeksAtHigh=closes.slice(Math.max(0,n-104),n-2).filter(c=>c>=hi2y*0.98).length;
+  const volRatio=s.volRatio||1;
+  let score=72; // high base — multi-year breaks are significant
+  score+=(n>=260&&Math.max(...closes.slice(n-260,n-2))===hi2y)?12:0; // 5Y high
+  score+=volRatio>2?10:volRatio>1.5?5:0; score+=s.rsi>55&&s.rsi<85?5:0;
+  score=Math.min(100,score);
+  const yrs=Math.round(n/52);
+  return {type:`${yrs}Y High Break`,icon:'🚀',score,hi2y:+hi2y.toFixed(2),
+    keyLevel:+hi2y.toFixed(2),
+    detail:`Breaking ${yrs}-year high ₹${hi2y.toFixed(0)} · vol ${volRatio.toFixed(1)}x`,
+    pattern_bars:wk.slice(Math.max(0,n-20),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── 10. Power Gap ──────────────────────────────────────────────────────────────
+function detectPowerGap(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<8) return null;
+  const n=wk.length;
+  // Gap: current week opens above prior week's high
+  for (let i=Math.max(1,n-4); i<n; i++) {
+    const prev=wk[i-1], curr=wk[i];
+    const gapPct=(curr.o-prev.h)/prev.h*100;
+    if (gapPct<1.5) continue; // need meaningful gap
+    const held=curr.c>curr.o; // gap held (bullish candle)
+    if (!held) continue;
+    const volRatio=s.volRatio||1;
+    let score=62;
+    score+=gapPct>4?12:gapPct>2?7:3; score+=volRatio>2?10:volRatio>1.5?5:0;
+    score+=s.rsi>52&&s.rsi<80?6:0; score+=(n-1-i)===0?8:3;
+    score=Math.min(100,score);
+    return {type:'Power Gap',icon:'💥',score,gapPct:+gapPct.toFixed(1),
+      gapLevel:+prev.h.toFixed(2),keyLevel:+prev.h.toFixed(2),
+      detail:`Gap up ${gapPct.toFixed(1)}% above prior week high ₹${prev.h.toFixed(0)} · gap held`,
+      pattern_bars:wk.slice(Math.max(0,i-5),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+  }
+  return null;
+}
+
+// ── 11. Stage 2 Base Breakout ─────────────────────────────────────────────────
+function detectStage2(s) {
+  const wk=s.weekly;
+  if (!wk||wk.length<20) return null;
+  const n=wk.length, closes=wk.map(b=>b.c), price=closes[n-1];
+  // Stage 1: flat base (standard deviation low in prior 10-30 weeks)
+  const baseWks=wk.slice(Math.max(0,n-30),n-4);
+  const baseCloses=baseWks.map(b=>b.c);
+  const baseMean=baseCloses.reduce((a,b)=>a+b,0)/baseCloses.length;
+  const baseSD=Math.sqrt(baseCloses.reduce((a,b)=>a+(b-baseMean)**2,0)/baseCloses.length);
+  const baseCV=baseSD/baseMean*100; // coefficient of variation
+  if (baseCV>8) return null; // too volatile — not a proper base
+  // Stage 2: price now breaking above the base
+  const baseHigh=Math.max(...baseCloses);
+  if (price<=baseHigh*0.99) return null;
+  const breakRecent=closes[n-3]<=baseHigh||closes[n-2]<=baseHigh;
+  if (!breakRecent) return null;
+  const volRatio=s.volRatio||1;
+  let score=65;
+  score+=baseCV<4?15:baseCV<6?8:3; score+=baseWks.length>15?8:4;
+  score+=volRatio>2?10:volRatio>1.5?5:0; score+=s.rsi>52&&s.rsi<80?5:0;
+  score=Math.min(100,score);
+  return {type:'Stage 2 Base',icon:'📊',score,baseHigh:+baseHigh.toFixed(2),
+    baseTightness:+baseCV.toFixed(1),keyLevel:+baseHigh.toFixed(2),
+    detail:`${baseWks.length}wk base (${baseCV.toFixed(1)}% tight) · breaking above ₹${baseHigh.toFixed(0)}`,
+    pattern_bars:wk.slice(Math.max(0,n-20),n).map(b=>({o:b.o,h:b.h,l:b.l,c:b.c}))};
+}
+
+// ── Master detector — runs all patterns ───────────────────────────────────────
 function detectBreakout(s) {
   const patterns = [
-    detectWPattern(s),
-    detectWeeklyBreakout(s),
-    detectMonthlyBreakout(s),
-    detectMomentumShift(s),
+    detectWPattern(s), detectWeeklyBreakout(s), detectMonthlyBreakout(s),
+    detectMomentumShift(s), detectCupHandle(s), detectVCP(s),
+    detectInsideBarBreakout(s), detect52WBreakout(s), detectMultiYearBreakout(s),
+    detectPowerGap(s), detectStage2(s),
   ].filter(Boolean);
   if (!patterns.length) return null;
-  // Return highest scoring pattern (but keep all for display)
-  patterns.sort((a, b) => b.score - a.score);
-  return { best: patterns[0], all: patterns };
+  patterns.sort((a,b)=>b.score-a.score);
+  const best = patterns[0];
+  const cat  = classifyBreakout(s, best.type); // 'ath_momentum' | 'swing'
+  return { best, all: patterns, cat };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BREAKOUTS TAB RENDER
+// BREAKOUT SCAN ENGINE — Progressive
 // ══════════════════════════════════════════════════════════════════════════════
 
-let BK_FILTER = 'all';   // all | wpattern | weekly | monthly | momentum
-
-function sgBreakouts(ctrl) {
-  const area = document.getElementById('area');
-  const filterMap = { wpattern:'W Pattern', weekly:'Weekly Breakout', monthly:'Monthly Breakout', momentum:'Momentum Shift' };
-
-  const statusBadge = !P3_DONE
-    ? `<div style="font-size:.65rem;color:var(--yellow);padding:7px 12px;
-                   background:rgba(245,197,24,.08);border:1px solid rgba(245,197,24,.2);
-                   border-radius:8px;margin-bottom:10px">
-         ⏳ Phase 3 still loading — results update automatically as more stocks scan
-       </div>`
-    : `<div style="font-size:.63rem;color:var(--green);padding:5px 12px;
-                   background:rgba(0,212,154,.06);border:1px solid rgba(0,212,154,.2);
-                   border-radius:8px;margin-bottom:10px">
-         ✅ Full scan: ${AS.length} stocks · ${P3_DATA.length} from NSE universe
-       </div>`;
-
-  area.innerHTML = ctrl + `
-    <div class="sh">🔥 Breakout Scanner
-      <div class="sh-line"></div>
-      <span style="font-size:.63rem;color:var(--muted2)">W Pattern · Weekly/Monthly Breakout · Momentum Shift</span>
-    </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-      ${[['all','🔥 All'],['wpattern','〰️ W Pattern'],['weekly','📈 Weekly BO'],['monthly','🗓️ Monthly BO'],['momentum','⚡ Momentum']]
-        .map(([k,l]) => `<button onclick="BK_FILTER='${k}';bkRefreshUI()"
-          style="padding:5px 12px;border-radius:20px;font-size:.68rem;font-weight:700;cursor:pointer;
-                 border:1px solid ${BK_FILTER===k?'#a855f7':'var(--border2)'};
-                 background:${BK_FILTER===k?'rgba(168,85,247,.18)':'var(--card2)'};
-                 color:${BK_FILTER===k?'#f5d0fe':'var(--muted2)'}">${l}</button>`).join('')}
-    </div>
-    ${statusBadge}
-    <div id="bk-results"></div>`;
-
-  bkRefreshUI();
-}
-
-// ── Refresh the results area based on current state ───────────────────────────
-function bkRefreshUI() {
-  const resEl = document.getElementById('bk-results');
-  if (!resEl) return;
-
-  // No stocks loaded yet
-  if (!AS.length) {
-    resEl.innerHTML = `<div class="ibox" style="color:var(--muted2)">⚡ Load stocks first</div>`;
-    return;
-  }
-
-  // Not started yet — kick off
-  if (!BK_PHASE_DONE.p1) {
-    resEl.innerHTML = `<div style="text-align:center;padding:16px">
-      <div class="spin" style="margin:0 auto 8px"></div>
-      <div style="font-size:.68rem;color:var(--muted2)">Starting scan…</div></div>`;
-    setTimeout(() => bkOnP1Done([...AS]), 50);
-    return;
-  }
-
-  // Render current results (filtered)
-  renderBreakoutsFromCache();
-}
-
-// ── Breakout cache — pre-computed in background ────────────────────────────────
-// ── Breakout Scan Engine — Progressive ────────────────────────────────────────
-// Results appear as stocks scan, appended in real-time, sorted at the end
-// Phase 1 → immediate scan | Phase 2/3 → scan new batch, append to results
-
-let BK_RESULTS   = [];     // all found patterns so far (unsorted until done)
-let BK_SCANNED   = new Set(); // symbols already scanned
+let BK_VIEW      = 'swing';   // 'swing' | 'ath'  — active sub-tab
+let BK_FILTER    = 'all';     // pattern filter
+let BK_RESULTS   = [];        // all results (both categories)
+let BK_SCANNED   = new Set();
+let BK_CHECKED   = 0;         // total stocks checked (for counter)
+let BK_TOTAL     = 0;         // total stocks to check
 let BK_SCANNING  = false;
-let BK_PHASE_DONE = { p1: false, p2: false, p3: false };
+let BK_PHASE_DONE = { p1:false, p2:false, p3:false };
 
-// ── Pre-filter: cheap check before expensive pattern detection ─────────────────
+// ── Pre-filter: cheap check ───────────────────────────────────────────────────
 function bkIsCandidate(s) {
   if (!s.weekly || s.weekly.length < 8) return false;
-  const wk  = s.weekly;
-  const n   = wk.length;
-  const c   = wk[n-1].c;
-  const hi52= s.h52 || Math.max(...wk.slice(-52).map(b=>b.h));
-  const nearHigh  = hi52 > 0 && c >= hi52 * 0.82;
-  const momentum  = (s.weekChg || 0) > 1.5;
-  const volSurge  = (s.volRatio || 1) >= 1.4;
-  const prev3     = wk[n-4]?.c || c;
-  const recentMove= prev3 > 0 && (c - prev3) / prev3 * 100 > 2.5;
-  return nearHigh || momentum || volSurge || recentMove;
+  const wk=s.weekly, n=wk.length, c=wk[n-1].c;
+  const hi52=s.h52||Math.max(...wk.slice(-52).map(b=>b.h));
+  const nearHigh  = hi52>0 && c>=hi52*0.82;
+  const momentum  = (s.weekChg||0)>1.5;
+  const volSurge  = (s.volRatio||1)>=1.4;
+  const prev3     = wk[n-4]?.c||c;
+  const recentMove= prev3>0 && (c-prev3)/prev3*100>2.5;
+  return nearHigh||momentum||volSurge||recentMove;
 }
 
-// ── Scan a batch of stocks, append results, update UI ─────────────────────────
+// ── Scan a batch, append results live ─────────────────────────────────────────
 function bkScanBatch(stocks, phase, isFinal) {
   const candidates = stocks.filter(s => !BK_SCANNED.has(s.symbol) && bkIsCandidate(s));
-  candidates.forEach(s => BK_SCANNED.add(s.symbol));
+  const allNew     = stocks.filter(s => !BK_SCANNED.has(s.symbol));
+  allNew.forEach(s => BK_SCANNED.add(s.symbol));
+  BK_CHECKED += allNew.length;
 
-  // Run pattern detection on candidates
   const newResults = [];
   candidates.forEach(s => {
     const det = detectBreakout(s);
     if (det) newResults.push({ s, det });
   });
-
-  // Append to global results
   BK_RESULTS.push(...newResults);
 
-  // If final phase done, sort everything
   if (isFinal) {
-    BK_RESULTS.sort((a, b) => b.det.best.score - a.det.best.score);
+    BK_RESULTS.sort((a,b) => b.det.best.score - a.det.best.score);
     BK_SCANNING = false;
   }
 
-  console.log(`[BK P${phase}] scanned ${candidates.length} candidates → ${newResults.length} new patterns · total ${BK_RESULTS.length}`);
+  console.log(`[BK P${phase}] checked ${allNew.length} → ${candidates.length} candidates → ${newResults.length} patterns`);
 
-  // Update UI if breakouts tab is open
   if (CT === 'sg') {
     const resEl = document.getElementById('bk-results');
-    if (resEl) {
-      if (isFinal) {
-        renderBreakoutsFromCache();
-      } else {
-        bkAppendResults(newResults, resEl, phase);
-      }
-    }
+    if (resEl) bkUpdateUI(newResults, isFinal);
   }
 }
 
-// ── Append new cards below existing results (live streaming) ──────────────────
-function bkAppendResults(newResults, resEl, phase) {
-  if (!newResults.length) return;
-  let container = resEl.querySelector('.bk-stream');
-  if (!container) {
-    // First results — set up the streaming container
-    resEl.innerHTML = `
-      <div style="font-size:.67rem;color:var(--muted2);margin-bottom:8px" id="bk-count">
-        <strong style="color:var(--text)">${BK_RESULTS.length} patterns</strong> found so far
-        <span style="color:var(--yellow)"> · sorting when complete…</span>
-      </div>
-      <div class="bk-stream" style="display:flex;flex-direction:column;gap:10px"></div>`;
-    container = resEl.querySelector('.bk-stream');
-  } else {
-    // Update count
-    const countEl = document.getElementById('bk-count');
-    if (countEl) countEl.innerHTML = `
-      <strong style="color:var(--text)">${BK_RESULTS.length} patterns</strong> found so far
-      <span style="color:var(--yellow)"> · Phase ${phase} · sorting when complete…</span>`;
+// ── Update UI: append new cards + update counter ───────────────────────────────
+function bkUpdateUI(newResults, isFinal) {
+  const resEl = document.getElementById('bk-results');
+  if (!resEl) return;
+
+  // Update counter pill
+  const counterEl = document.getElementById('bk-counter');
+  if (counterEl) {
+    counterEl.innerHTML = `
+      <span style="color:var(--muted2)">Checked</span>
+      <strong style="color:var(--text)">${BK_CHECKED}</strong>
+      <span style="color:var(--muted2)">/ ${BK_TOTAL} stocks ·</span>
+      <strong style="color:#a855f7">${BK_RESULTS.length}</strong>
+      <span style="color:var(--muted2)">patterns ${BK_SCANNING?'⏳':'✅'}</span>`;
   }
-  // Append new cards
-  newResults.forEach(({ s, det }) => {
+
+  if (isFinal) {
+    renderBreakoutsFromCache();
+    return;
+  }
+
+  // Append new matching cards to correct sub-tab stream
+  if (!newResults.length) return;
+  const filtered = newResults.filter(r =>
+    r.det.cat === (BK_VIEW === 'ath' ? 'ath_momentum' : 'swing')
+  );
+  if (!filtered.length) return;
+
+  let stream = resEl.querySelector('.bk-stream');
+  if (!stream) {
+    resEl.innerHTML = `
+      <div class="bk-stream" style="display:flex;flex-direction:column;gap:10px"></div>`;
+    stream = resEl.querySelector('.bk-stream');
+  }
+  filtered.forEach(({ s, det }) => {
     const div = document.createElement('div');
     div.innerHTML = bkCard(s, det);
-    container.appendChild(div.firstElementChild);
+    stream.appendChild(div.firstElementChild);
   });
 }
 
-// ── Called from phase hooks ───────────────────────────────────────────────────
+// ── Phase hooks ───────────────────────────────────────────────────────────────
 function bkOnP1Done(stocks) {
-  BK_RESULTS   = [];
-  BK_SCANNED   = new Set();
-  BK_SCANNING  = true;
-  BK_PHASE_DONE = { p1: false, p2: false, p3: false };
-  // Scan P1 immediately (221 stocks, fast)
+  BK_RESULTS   = []; BK_SCANNED = new Set();
+  BK_CHECKED   = 0;  BK_SCANNING = true;
+  BK_PHASE_DONE = { p1:false, p2:false, p3:false };
+  BK_TOTAL = AS.filter(s=>s.weekly&&s.weekly.length>=8).length;
   bkScanBatch(stocks, 1, false);
   BK_PHASE_DONE.p1 = true;
 }
-
 function bkOnP2Done(stocks) {
-  // Only scan new stocks added in P2
-  const newStocks = stocks.filter(s => !BK_SCANNED.has(s.symbol));
-  bkScanBatch(newStocks, 2, false);
+  BK_TOTAL = AS.filter(s=>s.weekly&&s.weekly.length>=8).length;
+  bkScanBatch(stocks.filter(s=>!BK_SCANNED.has(s.symbol)), 2, false);
   BK_PHASE_DONE.p2 = true;
 }
-
 function bkOnP3Done(stocks) {
-  const newStocks = stocks.filter(s => !BK_SCANNED.has(s.symbol));
-  bkScanBatch(newStocks, 3, true); // isFinal=true → sort + final render
+  BK_TOTAL = AS.filter(s=>s.weekly&&s.weekly.length>=8).length;
+  bkScanBatch(stocks.filter(s=>!BK_SCANNED.has(s.symbol)), 3, true);
   BK_PHASE_DONE.p3 = true;
 }
-
-// ── Kept for compatibility — called when tab opens ────────────────────────────
 function scheduleBKScan() {
-  // Progressive scan: trigger appropriate phase
-  if (!BK_PHASE_DONE.p1 && AS.length > 0) { bkOnP1Done(AS); return; }
+  if (!BK_PHASE_DONE.p1 && AS.length>0) { bkOnP1Done(AS); return; }
   if (!BK_PHASE_DONE.p2) { bkOnP2Done(AS); return; }
   if (!BK_PHASE_DONE.p3) { bkOnP3Done(AS); }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// BREAKOUTS TAB UI
+// ══════════════════════════════════════════════════════════════════════════════
+
+function sgBreakouts(ctrl) {
+  const area = document.getElementById('area');
+  area.innerHTML = ctrl + `
+    <div class="sh">🔥 Breakout Scanner
+      <div class="sh-line"></div>
+      <span style="font-size:.63rem;color:var(--muted2)">11 patterns · W/Monthly/Weekly BO · Cup&Handle · VCP · Stage2 · more</span>
+    </div>
+
+    <!-- Sub-tabs: ATH vs Swing -->
+    <div style="display:flex;gap:0;margin-bottom:12px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
+      <button onclick="BK_VIEW='swing';bkRefreshUI()"
+        style="flex:1;padding:9px;font-size:.74rem;font-weight:800;cursor:pointer;border:none;
+               background:${BK_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
+               color:${BK_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
+        ⚡ Swing Breakout
+        <div style="font-size:.58rem;font-weight:400;margin-top:1px;opacity:.8">Local BO + ATH after 2wk wait</div>
+      </button>
+      <button onclick="BK_VIEW='ath';bkRefreshUI()"
+        style="flex:1;padding:9px;font-size:.74rem;font-weight:800;cursor:pointer;border:none;
+               background:${BK_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
+               color:${BK_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
+        🚀 ATH Momentum
+        <div style="font-size:.58rem;font-weight:400;margin-top:1px;opacity:.8">Continuous ATH run — extended</div>
+      </button>
+    </div>
+
+    <!-- Pattern filter -->
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">
+      ${[['all','🔥 All'],['wpattern','〰️ W'],['weekly','📈 Wk'],['monthly','🗓️ Mo'],
+         ['momentum','⚡ Mom'],['cup','☕ C&H'],['vcp','🔺 VCP'],
+         ['inside','📦 IB'],['52w','🏔️ 52W'],['multiyear','🚀 MY'],
+         ['gap','💥 Gap'],['stage2','📊 S2']]
+        .map(([k,l]) => `<button onclick="BK_FILTER='${k}';bkRefreshUI()"
+          style="padding:4px 9px;border-radius:16px;font-size:.62rem;font-weight:700;cursor:pointer;
+                 border:1px solid ${BK_FILTER===k?'#a855f7':'var(--border2)'};
+                 background:${BK_FILTER===k?'rgba(168,85,247,.18)':'var(--card2)'};
+                 color:${BK_FILTER===k?'#f5d0fe':'var(--muted2)'}">${l}</button>`).join('')}
+    </div>
+
+    <!-- Counter -->
+    <div id="bk-counter" style="font-size:.65rem;margin-bottom:10px;padding:6px 10px;
+         background:var(--card2);border-radius:8px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+      <span style="color:var(--muted2)">${AS.length>0?'Starting scan…':'Load stocks first'}</span>
+    </div>
+
+    <!-- P3 status -->
+    ${!P3_DONE?`<div style="font-size:.63rem;color:#fb923c;padding:5px 10px;
+      background:rgba(251,146,60,.08);border:1px solid rgba(251,146,60,.25);
+      border-radius:7px;margin-bottom:10px">
+      🟠 NSE Universe (Phase 3) loading — results update as more stocks scan
+    </div>`:''}
+
+    <div id="bk-results"></div>`;
+
+  bkRefreshUI();
+}
+
+function bkRefreshUI() {
+  const resEl = document.getElementById('bk-results');
+  if (!resEl) return;
+  if (!AS.length) {
+    resEl.innerHTML = `<div class="ibox" style="color:var(--muted2)">⚡ Load stocks first</div>`;
+    return;
+  }
+  if (!BK_PHASE_DONE.p1) {
+    resEl.innerHTML = `<div style="text-align:center;padding:14px">
+      <div class="spin" style="margin:0 auto 8px"></div>
+      <div style="font-size:.68rem;color:var(--muted2)">Starting scan…</div></div>`;
+    setTimeout(()=>bkOnP1Done([...AS]),50);
+    return;
+  }
+  renderBreakoutsFromCache();
+}
 
 function renderBreakoutsFromCache() {
   const resEl = document.getElementById('bk-results');
   if (!resEl) return;
 
-  const filterMap = {
-    wpattern: 'W Pattern', weekly: 'Weekly Breakout',
-    monthly:  'Monthly Breakout', momentum: 'Momentum Shift',
+  const typeMap = {
+    wpattern:'W Pattern', weekly:'Weekly Breakout', monthly:'Monthly Breakout',
+    momentum:'Momentum Shift', cup:'Cup & Handle', vcp:'VCP',
+    inside:'Inside Bar BO', '52w':'52W High Break', multiyear:'Y High Break',
+    gap:'Power Gap', stage2:'Stage 2 Base',
   };
 
-  let results = BK_RESULTS || [];
+  const cat = BK_VIEW === 'ath' ? 'ath_momentum' : 'swing';
+  let results = (BK_RESULTS||[]).filter(r => r.det.cat === cat);
+
   if (BK_FILTER !== 'all') {
-    const wantType = filterMap[BK_FILTER];
-    results = results.map(({ s, det }) => {
-      const fp = det.all.find(p => p.type === wantType);
-      if (!fp) return null;
-      return { s, det: { ...det, best: fp } };
-    }).filter(Boolean);
+    const want = typeMap[BK_FILTER];
+    results = results.filter(r =>
+      r.det.all.some(p => want === 'Y High Break' ? p.type.includes('Y High Break') : p.type === want)
+    ).map(r => {
+      const fp = r.det.all.find(p => want==='Y High Break'?p.type.includes('Y High Break'):p.type===want);
+      return fp ? { ...r, det:{...r.det, best:fp} } : r;
+    });
   }
 
-  const scanning    = BK_SCANNING;
-  const phaseLabel  = !BK_PHASE_DONE.p2 ? 'Phase 1 done' : !BK_PHASE_DONE.p3 ? 'Phase 2 done' : 'All phases done';
-  const scannedSym  = BK_SCANNED.size;
+  // Update counter
+  const counterEl = document.getElementById('bk-counter');
+  if (counterEl) counterEl.innerHTML = `
+    <span style="color:var(--muted2)">Checked</span>
+    <strong style="color:var(--text)">${BK_CHECKED}</strong>
+    <span style="color:var(--muted2)">/ ${BK_TOTAL||AS.length} stocks ·</span>
+    <strong style="color:#a855f7">${BK_RESULTS.length}</strong>
+    <span style="color:var(--muted2)">total patterns ·</span>
+    <strong style="color:${BK_VIEW==='swing'?'#c084fc':'#fde68a'}">${results.length}</strong>
+    <span style="color:var(--muted2)">${BK_VIEW==='swing'?'swing':'ATH'} ${BK_SCANNING?'⏳ scanning…':'✅ done'}`;
 
   if (!results.length) {
-    resEl.innerHTML = `
-      ${scanning ? `<div style="font-size:.64rem;color:var(--yellow);margin-bottom:8px">
-        ⏳ Scanning… ${scannedSym} stocks checked · more results coming
-      </div>` : ''}
-      <div class="ibox" style="color:var(--yellow)">
-        No ${BK_FILTER === 'all' ? '' : filterMap[BK_FILTER] + ' '}patterns found yet.<br>
-        <span style="font-size:.63rem;color:var(--muted2)">
-          ${scanning ? 'More phases still scanning…' : 'Try a different filter.'}
-        </span>
-      </div>`;
+    resEl.innerHTML = `<div class="ibox" style="color:var(--yellow)">
+      No ${BK_VIEW==='ath'?'ATH momentum':'swing breakout'} patterns found yet.
+      ${BK_SCANNING?'<br><span style="font-size:.63rem;color:var(--muted2)">More phases scanning…</span>':''}
+    </div>`;
     return;
   }
 
   resEl.innerHTML = `
-    <div style="font-size:.68rem;color:var(--muted2);margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-      <strong style="color:var(--text)">${results.length} patterns</strong>
-      · ${scannedSym} stocks scanned · top 40 shown
-      ${scanning ? '<span style="color:var(--yellow)">⏳ more coming…</span>'
-                 : '<span style="color:var(--green)">✅ sorted by score</span>'}
-    </div>
     <div style="display:flex;flex-direction:column;gap:10px">
-      ${results.slice(0, 40).map(({ s, det }) => bkCard(s, det)).join('')}
+      ${results.slice(0,50).map(({s,det})=>bkCard(s,det)).join('')}
     </div>`;
 }
 
