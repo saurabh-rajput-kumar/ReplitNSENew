@@ -2328,7 +2328,7 @@ async function loadData(){
   if(fn[CT])fn[CT]();
 
   // ── PHASE 3: Phase 3 breakout scan (silent background) ────────────────
-  setTimeout(loadP3, 3000); // start 3s after P2 done — let UI settle
+  P3_DONE = true; // Phase 3 disabled — P1+P2 universe is sufficient
 }
 
 function updSecFilter(){
@@ -10878,36 +10878,70 @@ function bkIsCandidate(s) {
 
 // ── Chunked async scanner — processes 25 stocks per frame ────────────────────
 function bkScanChunked(stocks, phase, isFinal) {
-  const CHUNK = 25;
-  let idx = 0;
-  const eligible = stocks.filter(s => !BK_SCANNED.has(s.symbol));
+  // Snapshot eligible stocks ONCE to avoid mid-scan mutations
+  const eligible = stocks.filter(s => s.weekly && s.weekly.length >= 8 && !BK_SCANNED.has(s.symbol));
+  const CHUNK    = 20;
+  let   idx      = 0;
 
-  function runChunk() {
-    const end = Math.min(idx + CHUNK, eligible.length);
-    const batch = eligible.slice(idx, end);
-    bkScanBatch(batch, phase, isFinal && end >= eligible.length);
-    idx = end;
-    if (idx < eligible.length) {
-      requestAnimationFrame(runChunk); // yield to browser between chunks
-    } else if (!isFinal) {
-      BK_PHASE_DONE[`p${phase}`] = true;
-    }
-  }
   if (eligible.length === 0) {
     if (isFinal) { BK_RESULTS.sort((a,b)=>b.det.best.score-a.det.best.score); BK_SCANNING=false; }
-    BK_PHASE_DONE[`p${phase}`] = true;
+    BK_PHASE_DONE['p'+phase] = true;
     bkUpdateUI([], isFinal);
     return;
   }
-  requestAnimationFrame(runChunk);
+
+  function runChunk() {
+    const end   = Math.min(idx + CHUNK, eligible.length);
+    const batch = eligible.slice(idx, end);
+    const final = isFinal && end >= eligible.length;
+
+    // Mark as scanned and count BEFORE pattern detection
+    batch.forEach(s => { BK_SCANNED.add(s.symbol); BK_CHECKED++; });
+
+    // Run pattern detection only on candidates
+    const cands = batch.filter(s => bkIsCandidate(s));
+    const found = [];
+    cands.forEach(s => {
+      const det = detectBreakout(s);
+      if (det) { BK_RESULTS.push({s, det}); found.push({s, det}); }
+    });
+
+    idx = end;
+
+    // Update counter
+    const ctr = document.getElementById('bk-counter');
+    if (ctr) ctr.innerHTML =
+      '<span style="color:var(--muted2)">Checked </span>'
+      + '<strong style="color:var(--text)">'+BK_CHECKED+'</strong>'
+      + '<span style="color:var(--muted2)"> / '+BK_TOTAL+' stocks · </span>'
+      + '<strong style="color:#a855f7">'+BK_RESULTS.length+'</strong>'
+      + '<span style="color:var(--muted2)"> patterns '+(BK_SCANNING?'⏳':'✅')+'</span>';
+
+    // Append new results to UI immediately
+    if (found.length && CT === 'sg') {
+      const resEl = document.getElementById('bk-results');
+      if (resEl) bkUpdateUI(found, final);
+    }
+
+    if (final) {
+      BK_RESULTS.sort((a,b)=>b.det.best.score-a.det.best.score);
+      BK_SCANNING = false;
+      BK_PHASE_DONE['p'+phase] = true;
+      if (CT === 'sg') renderBreakoutsFromCache();
+    } else if (idx < eligible.length) {
+      setTimeout(runChunk, 20); // 20ms gap — browser can repaint
+    } else {
+      BK_PHASE_DONE['p'+phase] = true;
+    }
+  }
+  setTimeout(runChunk, 0);
 }
 
 // ── Scan a batch, append results live ─────────────────────────────────────────
 function bkScanBatch(stocks, phase, isFinal) {
-  const candidates = stocks.filter(s => !BK_SCANNED.has(s.symbol) && bkIsCandidate(s));
-  const allNew     = stocks.filter(s => !BK_SCANNED.has(s.symbol));
-  allNew.forEach(s => BK_SCANNED.add(s.symbol));
-  BK_CHECKED += allNew.length;
+  // Note: BK_SCANNED and BK_CHECKED are managed by bkScanChunked when called from there
+  // When called directly, we manage them here
+  const candidates = stocks.filter(s => bkIsCandidate(s));
 
   const newResults = [];
   candidates.forEach(s => {
@@ -10972,36 +11006,47 @@ function bkUpdateUI(newResults, isFinal) {
 
 // ── Phase hooks ───────────────────────────────────────────────────────────────
 function bkOnP1Done(stocks) {
-  BK_RESULTS   = []; BK_SCANNED = new Set();
-  BK_CHECKED   = 0;  BK_SCANNING = true;
+  BK_RESULTS    = []; BK_SCANNED = new Set();
+  BK_CHECKED    = 0;  BK_SCANNING = true;
   BK_PHASE_DONE = { p1:false, p2:false, p3:false };
-  BK_TOTAL = AS.filter(s=>s.weekly&&s.weekly.length>=8).length;
-  // Show counter immediately before any work
+  // Wait until stocks have weekly data populated
+  const withWeekly = stocks.filter(s => s.weekly && s.weekly.length >= 8);
+  BK_TOTAL = withWeekly.length;
+  if (BK_TOTAL === 0) {
+    // Weekly data not ready yet — retry in 2 seconds
+    setTimeout(() => bkOnP1Done(AS), 2000);
+    return;
+  }
+  // Update counter display
   const ctr = document.getElementById('bk-counter');
-  if (ctr) ctr.innerHTML = `<span style="color:var(--muted2)">Checked</span>
-    <strong style="color:var(--text)">0</strong>
-    <span style="color:var(--muted2)">/ ${BK_TOTAL} stocks ·</span>
-    <strong style="color:#a855f7">0</strong>
-    <span style="color:var(--muted2)">patterns ⏳</span>`;
-  // Show empty results area immediately — removes spinner
+  if (ctr) ctr.innerHTML = '<span style="color:var(--muted2)">Checked </span>'
+    + '<strong style="color:var(--text)">0</strong>'
+    + '<span style="color:var(--muted2)"> / '+BK_TOTAL+' stocks · </span>'
+    + '<strong style="color:#a855f7">0</strong>'
+    + '<span style="color:var(--muted2)"> patterns ⏳</span>';
+  // Clear results area
   const resEl = document.getElementById('bk-results');
   if (resEl) resEl.innerHTML = '<div class="bk-stream" style="display:flex;flex-direction:column;gap:10px"></div>';
-  // Run scan in chunks so UI stays alive
-  bkScanChunked(stocks, 1, false);
+  bkScanChunked(withWeekly, 1, true); // isFinal=true since P2 scan handles P2 stocks separately
 }
 function bkOnP2Done(stocks) {
-  BK_TOTAL = AS.filter(s=>s.weekly&&s.weekly.length>=8).length;
-  bkScanChunked(stocks.filter(s=>!BK_SCANNED.has(s.symbol)), 2, false);
+  const newStocks = stocks.filter(s => s.weekly && s.weekly.length >= 8 && !BK_SCANNED.has(s.symbol));
+  BK_TOTAL = BK_CHECKED + newStocks.length;
+  if (newStocks.length > 0) {
+    bkScanChunked(newStocks, 2, true); // isFinal=true → sort + final render
+  } else {
+    BK_PHASE_DONE.p2 = true;
+    BK_PHASE_DONE.p3 = true;
+    BK_SCANNING = false;
+    if (CT === 'sg') renderBreakoutsFromCache();
+  }
 }
 function bkOnP3Done(stocks) {
-  BK_TOTAL = AS.filter(s=>s.weekly&&s.weekly.length>=8).length;
-  bkScanBatch(stocks.filter(s=>!BK_SCANNED.has(s.symbol)), 3, true);
-  BK_PHASE_DONE.p3 = true;
+  BK_PHASE_DONE.p3 = true; // P3 removed — stub
 }
 function scheduleBKScan() {
-  if (!BK_PHASE_DONE.p1 && AS.length>0) { bkOnP1Done(AS); return; }
-  if (!BK_PHASE_DONE.p2) { bkOnP2Done(AS); return; }
-  if (!BK_PHASE_DONE.p3) { bkOnP3Done(AS); }
+  if (!BK_PHASE_DONE.p1 && AS.length > 0) { bkOnP1Done(AS); return; }
+  if (!BK_PHASE_DONE.p2) { bkOnP2Done(AS); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
