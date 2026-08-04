@@ -579,7 +579,6 @@ input,select,textarea{font-size:16px!important;}
 </div>
 <div class="nav-row2">
   <div class="ntab" id="t-iv" onclick="gt('iv')">💎 Invest</div>
-  <div class="ntab" id="t-fo" onclick="gt('fo')">📊 F&amp;O OI</div>
   <div class="ntab" id="t-fi" onclick="gt('fi')">🌍 FII/DII</div>
   <div class="ntab" id="t-ro" onclick="gt('ro')">🔁 Rotation</div>
   <div class="ntab" id="t-ca" onclick="gt('ca')">📅 Calendar</div>
@@ -2269,7 +2268,7 @@ function togAR(){
     stopAR();toast('Auto-refresh OFF','i');
   }
 }
-async function silRef(){if(!AS.length)return;const b=document.getElementById('lbtn'),o=b.textContent;b.textContent='↻ Refreshing...';const B=8;for(let i=0;i<AS.length;i+=B){const res=await Promise.all(AS.slice(i,i+B).map(s=>fetchS(s.symbol)));res.forEach((r,j)=>{if(r)AS[i+j]=r;});await sl(80);}document.getElementById('lu').textContent='⚡ '+new Date().toLocaleTimeString('en-IN');b.textContent=o;const fn={sc:rs,fo:rFnO,fi:rFII,ro:rRot};if(fn[CT])fn[CT]();chkAlerts();}
+async function silRef(){if(!AS.length)return;const b=document.getElementById('lbtn'),o=b.textContent;b.textContent='↻ Refreshing...';const B=8;for(let i=0;i<AS.length;i+=B){const res=await Promise.all(AS.slice(i,i+B).map(s=>fetchS(s.symbol)));res.forEach((r,j)=>{if(r)AS[i+j]=r;});await sl(80);}document.getElementById('lu').textContent='⚡ '+new Date().toLocaleTimeString('en-IN');b.textContent=o;const fn={sc:rs,fi:rFII,ro:rRot};if(fn[CT])fn[CT]();chkAlerts();}
 
 // ── BG_LOADING: tracks whether phase-2 background load is in progress ───────
 let BG_LOADING = false;
@@ -2354,7 +2353,7 @@ function bgBadge(loading, pct, total, label){
 
 function startARI(){if(ALI)clearInterval(ALI);ALI=setInterval(chkAlerts,30000);}
 
-function gt(t){CT=t;document.querySelectorAll('.ntab').forEach(e=>e.classList.remove('active'));const e=document.getElementById('t-'+t);if(e)e.classList.add('active');document.getElementById('cbar').style.display=t==='sc'?'flex':'none';document.getElementById('tf-panel').style.display=t==='sc'?'block':'none';const fn={sc:rs,fo:rFnO,fi:rFII,ro:rRot,ca:rCal,nw:rNews,sg:rSG,iv:rInvest};if(fn[t])fn[t]();}
+function gt(t){CT=t;document.querySelectorAll('.ntab').forEach(e=>e.classList.remove('active'));const e=document.getElementById('t-'+t);if(e)e.classList.add('active');document.getElementById('cbar').style.display=t==='sc'?'flex':'none';document.getElementById('tf-panel').style.display=t==='sc'?'block':'none';const fn={sc:rs,fi:rFII,ro:rRot,ca:rCal,nw:rNews,sg:rSG,iv:rInvest};if(fn[t])fn[t]();}
 
 function getSD(){const m={};AS.forEach(s=>{const sec=s.sector||'Others';if(!m[sec])m[sec]={n:0,d:0,w:0};m[sec].n++;m[sec].d+=s.pctChange;m[sec].w+=s.weekChg||0;});return Object.entries(m).map(([name,d])=>{const avgD=d.d/d.n,avgW=d.w/d.n;const state=avgW>1.5?'Momentum':avgW<-1.5?'Selling':Math.abs(avgW)<0.5?'Ranging':'Recovering';return{name,avgD,avgW,state};}).sort((a,b)=>b.avgW-a.avgW);}
 
@@ -3316,7 +3315,8 @@ function sgRender(view) {
       </select>
     </div>`;
 
-  area.innerHTML = ctrl + (view === 'movers' ? sgMovers() : view === 'goldcross' ? sgGoldCross() : sgDelivery());
+  if (view === 'breakouts') { sgBreakouts(ctrl); return; }
+  area.innerHTML = ctrl + (view === 'movers' ? sgMovers() : sgDelivery());
 }
 
 // ── View 1: Big Movers ────────────────────────────────────────────────────────
@@ -5533,7 +5533,28 @@ function rsBRK() {
     </div>`;
 
   if (!stocks.length) {
-    area.innerHTML = stratBanner + `<div class="ibox" style="color:var(--yellow)">
+  
+  // ── ATH vs Swing sub-tabs ──────────────────────────────────────────────────
+  const __ath_rsBRK   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
+  const __swing_rsBRK = stocks.filter(s => classifyBreakout(s,'') === 'swing');
+  const __view_rsBRK  = SC_VIEW === 'ath' ? __ath_rsBRK : __swing_rsBRK;
+  const __subtabs_rsBRK = `
+    <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
+      <button onclick="SC_VIEW='swing';rsBRK&&CT==='sc'?rsBRK():rsRNG&&CT==='sc'?rsRNG():rsPAT()"
+        style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
+               background:\${SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
+               color:\${SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
+        ⚡ Swing Breakout <span style="font-size:.6rem;opacity:.8">(\${__swing_rsBRK.length})</span>
+      </button>
+      <button onclick="SC_VIEW='ath';rsBRK&&CT==='sc'?rsBRK():rsRNG&&CT==='sc'?rsRNG():rsPAT()"
+        style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
+               background:\${SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
+               color:\${SC_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
+        🚀 ATH Momentum <span style="font-size:.6rem;opacity:.8">(\${__ath_rsBRK.length})</span>
+      </button>
+    </div>`;
+
+  area.innerHTML = stratBanner + __subtabs_rsBRK + `<div class="ibox" style="color:var(--yellow)">
       No ${tfLabels[tf].toLowerCase()} breakouts detected. This is normal — genuine breakouts are rare.
       Try a different timeframe or check again after market hours.
     </div>`;
@@ -5546,7 +5567,7 @@ function rsBRK() {
       <div class="pill"><strong style="color:#d8b4fe">${stocks.filter(s=>s.brkData.strength>=70).length}</strong> Strong</div>
       <div class="pill"><strong style="color:var(--yellow)">${stocks.filter(s=>s.brkData.type==='volume_confirmed').length}</strong> Vol Confirmed</div>
     </div>` +
-    `<div class="grid">${stocks.slice(0,40).map(s => brkCardHTML(s, tf)).join('')}</div>`;
+    `<div class="grid">${__view_rsBRK.slice(0,40).map(s => brkCardHTML(s, tf)).join('')}</div>`;
 }
 
 function brkScore(s, tf) {
@@ -5731,13 +5752,30 @@ function rsRNG() {
     return;
   }
 
-  area.innerHTML = banner +
+
+  const _ath   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
+  const _swing = stocks.filter(s => classifyBreakout(s,'') === 'swing');
+  const _view  = SC_VIEW === 'ath' ? _ath : _swing;
+  const _subtabs = `
+    <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
+      <button onclick="SC_VIEW='swing';rsRNG()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
+               background:\${SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
+               color:\${SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
+        ⚡ Swing <span style="font-size:.6rem;opacity:.8">(\${_swing.length})</span>
+      </button>
+      <button onclick="SC_VIEW='ath';rsRNG()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;
+               background:\${SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
+               color:\${SC_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
+        🚀 ATH <span style="font-size:.6rem;opacity:.8">(\${_ath.length})</span>
+      </button>
+    </div>`;
+  area.innerHTML = banner + _subtabs +
     `<div class="srow" style="margin-bottom:14px;flex-wrap:wrap;gap:6px">
-      <div class="pill"><strong>${stocks.length}</strong> Ranging</div>
-      <div class="pill"><strong style="color:#67e8f9">${stocks.filter(s=>s.rngData.score>=80).length}</strong> Tight Range</div>
-      <div class="pill"><strong style="color:var(--yellow)">${stocks.filter(s=>s.rngData.nearBreak).length}</strong> Near Breakout</div>
+      <div class="pill"><strong>${_view.length}</strong> Ranging</div>
+      <div class="pill"><strong style="color:#67e8f9">${_view.filter(s=>s.rngData.score>=80).length}</strong> Tight Range</div>
+      <div class="pill"><strong style="color:var(--yellow)">${_view.filter(s=>s.rngData.nearBreak).length}</strong> Near Breakout</div>
     </div>` +
-    `<div class="grid">${stocks.slice(0,40).map(s => rngCardHTML(s, tf)).join('')}</div>`;
+    `<div class="grid">${_view.slice(0,40).map(s => rngCardHTML(s, tf)).join('')}</div>`;
 }
 
 function rngScore(s, tf) {
@@ -6513,7 +6551,23 @@ function rsPAT() {
       <strong style="color:var(--text)">${results.length} stocks</strong>
       showing ${mi.name} on ${insideTFLabel.toLowerCase()} charts · sorted by quality score`;
 
-    resEl.innerHTML = `<div class="grid">${results.slice(0, 40).map(s => patCardHTML(s, mode, mi)).join('')}</div>`;
+    const _pAth   = results.filter(r => classifyBreakout(r,'') === 'ath_momentum');
+    const _pSwing = results.filter(r => classifyBreakout(r,'') === 'swing');
+    const _pView  = SC_VIEW === 'ath' ? _pAth : _pSwing;
+    const _pSubtabs = `
+      <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">
+        <button onclick="SC_VIEW='swing';rsPAT()" style="flex:1;padding:6px;font-size:.68rem;font-weight:800;cursor:pointer;border:none;
+                 background:\${SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)'};
+                 color:\${SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)'};border-right:1px solid var(--border2)">
+          ⚡ Swing (\${_pSwing.length})
+        </button>
+        <button onclick="SC_VIEW='ath';rsPAT()" style="flex:1;padding:6px;font-size:.68rem;font-weight:800;cursor:pointer;border:none;
+                 background:\${SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)'};
+                 color:\${SC_VIEW==='ath'?'#fde68a':'var(--muted2)'}">
+          🚀 ATH (\${_pAth.length})
+        </button>
+      </div>`;
+    resEl.innerHTML = _pSubtabs + `<div class="grid">${_pView.slice(0, 40).map(s => patCardHTML(s, mode, mi)).join('')}</div>`;
   }, 40);
 }
 
