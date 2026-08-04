@@ -2329,6 +2329,7 @@ async function loadData(){
   if(ARE){if(isMarketOpen())startAR();else{ARE=false;const cb=document.getElementById('art'),sl2=document.getElementById('arsl'),th=document.getElementById('arth');if(cb)cb.checked=false;if(sl2)sl2.style.background='var(--border)';if(th)th.style.left='2px';const e=document.getElementById('arcd');if(e){e.textContent='Closed';e.style.color='var(--muted)';}}}
   rs();
   toast('Phase 1 loaded ('+AS.length+' stocks) — loading extended universe in background…','i');
+  setTimeout(scheduleBKScan, 2000); // pre-compute breakouts in background after P1
   bgBadge(true);
 
   // ── PHASE 2: Background load SYMS_P2 ───────────────────────────────────
@@ -2352,6 +2353,7 @@ async function loadData(){
   updSecFilter();
   document.getElementById('lu').textContent='✅ Full '+new Date().toLocaleTimeString('en-IN');
   toast('Full universe loaded ('+AS.length+' stocks) — refreshing…','i');
+  setTimeout(scheduleBKScan, 1000); // rescan with full universe
   const fn={sc:rs,fo:rFnO,fi:rFII,ro:rRot,bt:rBT,sg:rSG};
   if(fn[CT])fn[CT]();
 
@@ -9984,6 +9986,8 @@ async function loadP3() {
     P3_DATA = p3Results;
     P3_DONE = true;
 
+    // Rescan breakouts with P3 stocks included
+    setTimeout(scheduleBKScan, 500); // invalidates cache + rescans with full universe
     // Notify if user is on breakouts tab
     if (CT === 'sg') sgRender('breakouts');
     console.log(`[P3] Loaded ${p3Results.length} extra universe stocks`);
@@ -10327,77 +10331,119 @@ function sgBreakouts(ctrl) {
   setTimeout(() => renderBreakouts(), 30);
 }
 
+// ── Breakout cache — pre-computed in background ────────────────────────────────
+let BK_RESULTS  = null;   // cached scan results
+let BK_SCANNING = false;  // scan in progress flag
+let BK_SCAN_IDX = 0;      // current scan position
+
+// Called after P1 load and after P2 load — runs scan in background
+function scheduleBKScan() {
+  if (BK_SCANNING) return;
+  BK_RESULTS  = null;  // invalidate cache
+  BK_SCAN_IDX = 0;
+  BK_SCANNING = false;
+  setTimeout(runBKScanChunk, 800); // start after slight delay
+}
+
+function runBKScanChunk() {
+  const eligible = AS.filter(s => s.weekly && s.weekly.length >= 8);
+  if (!BK_RESULTS) { BK_RESULTS = []; BK_SCANNING = true; BK_SCAN_IDX = 0; }
+
+  const CHUNK = 20; // smaller chunks — runs in background
+  const end   = Math.min(BK_SCAN_IDX + CHUNK, eligible.length);
+
+  for (let i = BK_SCAN_IDX; i < end; i++) {
+    const det = detectBreakout(eligible[i]);
+    if (det) BK_RESULTS.push({ s: eligible[i], det });
+  }
+  BK_SCAN_IDX = end;
+
+  if (BK_SCAN_IDX < eligible.length) {
+    setTimeout(runBKScanChunk, 16); // ~1 frame delay, runs in background
+    return;
+  }
+
+  // Scan complete
+  BK_RESULTS.sort((a, b) => b.det.best.score - a.det.best.score);
+  BK_SCANNING = false;
+
+  // If breakouts tab is open, refresh it
+  if (CT === 'sg') {
+    const resEl = document.getElementById('bk-results');
+    if (resEl) renderBreakoutsFromCache();
+  }
+}
+
 function renderBreakouts() {
   const resEl = document.getElementById('bk-results');
   if (!resEl) return;
+
+  // If we have cached results, show them instantly
+  if (BK_RESULTS && !BK_SCANNING) {
+    renderBreakoutsFromCache();
+    return;
+  }
+
+  // No cache yet — show progress and start scan if not running
+  const eligible = AS.filter(s => s.weekly && s.weekly.length >= 8);
+  const scanned  = BK_SCAN_IDX || 0;
+  const pct      = eligible.length ? Math.round(scanned / eligible.length * 100) : 0;
+
+  resEl.innerHTML = `
+    <div style="text-align:center;padding:20px">
+      <div style="width:100%;height:6px;background:var(--card2);border-radius:3px;margin-bottom:12px">
+        <div style="width:${pct}%;height:6px;background:linear-gradient(90deg,#7c3aed,#a855f7);
+                    border-radius:3px;transition:width .3s"></div>
+      </div>
+      <div style="font-size:.7rem;color:var(--muted2)">
+        ${BK_SCANNING
+          ? `Scanning in background… ${scanned}/${eligible.length} stocks`
+          : `Starting scan of ${eligible.length} stocks…`}
+      </div>
+      <div style="font-size:.62rem;color:var(--muted2);margin-top:6px">
+        Results will appear automatically when ready
+      </div>
+    </div>`;
+
+  if (!BK_SCANNING) scheduleBKScan();
+}
+
+function renderBreakoutsFromCache() {
+  const resEl = document.getElementById('bk-results');
+  if (!resEl || !BK_RESULTS) return;
 
   const filterMap = {
     wpattern: 'W Pattern', weekly: 'Weekly Breakout',
     monthly:  'Monthly Breakout', momentum: 'Momentum Shift',
   };
 
-  // ── Chunked async scan — 30 stocks per chunk so phone stays responsive ──────
-  const eligible = AS.filter(s => s.weekly && s.weekly.length >= 8);
-  const results  = [];
-  const CHUNK    = 30;
-  let   idx      = 0;
-
-  function processChunk() {
-    const end = Math.min(idx + CHUNK, eligible.length);
-    for (let i = idx; i < end; i++) {
-      const s   = eligible[i];
-      const det = detectBreakout(s);
-      if (!det) continue;
-      if (BK_FILTER !== 'all') {
-        const wantType = filterMap[BK_FILTER];
-        if (!det.all.some(p => p.type === wantType)) continue;
-        const fp = det.all.find(p => p.type === wantType);
-        if (fp) det.best = fp;
-      }
-      results.push({ s, det });
-    }
-    idx = end;
-
-    // Update progress
-    const pct = Math.round(idx / eligible.length * 100);
-    if (resEl && idx < eligible.length) {
-      resEl.innerHTML = `
-        <div style="text-align:center;padding:16px">
-          <div style="width:100%;height:4px;background:var(--card2);border-radius:2px;margin-bottom:10px">
-            <div style="width:${pct}%;height:4px;background:#a855f7;border-radius:2px;transition:width .2s"></div>
-          </div>
-          <div style="font-size:.68rem;color:var(--muted2)">
-            Scanning… ${idx}/${eligible.length} stocks · ${results.length} patterns found so far
-          </div>
-        </div>`;
-      setTimeout(processChunk, 0); // yield to browser, then continue
-      return;
-    }
-
-    // Done — render results
-    results.sort((a, b) => b.det.best.score - a.det.best.score);
-
-    if (!results.length) {
-      resEl.innerHTML = `<div class="ibox" style="color:var(--yellow)">
-        No ${BK_FILTER === 'all' ? '' : filterMap[BK_FILTER] + ' '}patterns found right now.<br>
-        <span style="font-size:.65rem;color:var(--muted2)">
-          Patterns require specific price structure. Try a different filter
-          or check after more stocks load.
-        </span></div>`;
-      return;
-    }
-
-    resEl.innerHTML = `
-      <div style="font-size:.68rem;color:var(--muted2);margin-bottom:10px">
-        <strong style="color:var(--text)">${results.length} patterns</strong> found
-        in ${eligible.length} stocks · top 40 shown · sorted by score
-      </div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        ${results.slice(0, 40).map(({ s, det }) => bkCard(s, det)).join('')}
-      </div>`;
+  let results = BK_RESULTS;
+  if (BK_FILTER !== 'all') {
+    const wantType = filterMap[BK_FILTER];
+    results = BK_RESULTS.map(({ s, det }) => {
+      const fp = det.all.find(p => p.type === wantType);
+      if (!fp) return null;
+      return { s, det: { ...det, best: fp } };
+    }).filter(Boolean);
   }
 
-  processChunk();
+  if (!results.length) {
+    resEl.innerHTML = `<div class="ibox" style="color:var(--yellow)">
+      No ${BK_FILTER === 'all' ? '' : filterMap[BK_FILTER] + ' '}patterns found.<br>
+      <span style="font-size:.63rem;color:var(--muted2)">
+        Try a different filter or wait for more stocks to load.
+      </span></div>`;
+    return;
+  }
+
+  resEl.innerHTML = `
+    <div style="font-size:.68rem;color:var(--muted2);margin-bottom:10px">
+      <strong style="color:var(--text)">${results.length} patterns</strong>
+      in ${AS.filter(s=>s.weekly&&s.weekly.length>=8).length} stocks · top 40 shown · sorted by score
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${results.slice(0, 40).map(({ s, det }) => bkCard(s, det)).join('')}
+    </div>`;
 }
 
 // ── Mini candlestick visual (SVG) ─────────────────────────────────────────────
