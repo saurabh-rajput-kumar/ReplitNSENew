@@ -576,6 +576,7 @@ input,select,textarea{font-size:16px!important;}
 <div class="nav">
   <div class="ntab active" id="t-sc" onclick="gt('sc')">📋 Screener</div>
   <div class="ntab" id="t-sg" onclick="gt('sg')">📡 Signals</div>
+  <div class="ntab" id="t-bk" onclick="gt('bk')">📈 Breakout</div>
 </div>
 <div class="nav-row2">
   <div class="ntab" id="t-iv" onclick="gt('iv')">💎 Invest</div>
@@ -2055,6 +2056,7 @@ function hexToRGB(hex){
 
 // Breakout/Ranging sub-timeframe state
 let RNG_SUB = 'daily';
+let BRK_SUB = 'weekly';  // daily | weekly | monthly | yearly
 let MYR_SUB = 'breakout'; // breakout | support
 let PAT_SUB = 'inside';    // inside | flag | asc_tri | desc_tri
 let PAT_TF  = 'weekly';    // weekly | monthly | yearly  (only used for inside bar)
@@ -2123,6 +2125,26 @@ function rngSubRow(active) {
              border:1px solid ${active===t.k?'#06b6d4':'var(--border2)'};
              background:${active===t.k?'rgba(6,182,212,.15)':'var(--card2)'};
              color:${active===t.k?'#67e8f9':'var(--muted2)'};transition:all .15s">
+      ${t.label}<div style="font-size:.58rem;font-weight:400;opacity:.7;margin-top:1px">${t.desc}</div>
+    </button>`).join('')}
+  </div>`;
+}
+
+// Sub-timeframe row for Breakout
+function brkSubRow(active) {
+  const tfs = [
+    {k:'daily',   label:'📈 Daily',   desc:'Last session breakout'},
+    {k:'weekly',  label:'📅 Weekly',  desc:"This week's range break"},
+    {k:'monthly', label:'🗓 Monthly', desc:'Month high/low break'},
+    {k:'yearly',  label:'🏆 Yearly',  desc:'52-week high breakout'},
+  ];
+  return `<div style="display:flex;gap:6px;padding:8px 0;flex-wrap:wrap">
+    ${tfs.map(t=>`<button
+      onclick="BRK_SUB='${t.k}';document.getElementById('strat-row').innerHTML=brkSubRow('${t.k}');rsBRK()"
+      style="padding:6px 14px;border-radius:8px;font-size:.72rem;font-weight:700;cursor:pointer;
+             border:1px solid ${active===t.k?'#a855f7':'var(--border2)'};
+             background:${active===t.k?'rgba(168,85,247,.2)':'var(--card2)'};
+             color:${active===t.k?'#d8b4fe':'var(--muted2)'};transition:all .15s">
       ${t.label}<div style="font-size:.58rem;font-weight:400;opacity:.7;margin-top:1px">${t.desc}</div>
     </button>`).join('')}
   </div>`;
@@ -2321,7 +2343,7 @@ function bgBadge(loading, pct, total, label){
 
 function startARI(){if(ALI)clearInterval(ALI);ALI=setInterval(chkAlerts,30000);}
 
-function gt(t){CT=t;document.querySelectorAll('.ntab').forEach(e=>e.classList.remove('active'));const e=document.getElementById('t-'+t);if(e)e.classList.add('active');document.getElementById('cbar').style.display=t==='sc'?'flex':'none';document.getElementById('tf-panel').style.display=t==='sc'?'block':'none';const fn={sc:rs,fi:rFII,ro:rRot,ca:rCal,nw:rNews,sg:rSG,iv:rInvest};if(fn[t])fn[t]();}
+function gt(t){CT=t;document.querySelectorAll('.ntab').forEach(e=>e.classList.remove('active'));const e=document.getElementById('t-'+t);if(e)e.classList.add('active');document.getElementById('cbar').style.display=t==='sc'?'flex':'none';document.getElementById('tf-panel').style.display=t==='sc'?'block':'none';const fn={sc:rs,fi:rFII,ro:rRot,ca:rCal,nw:rNews,sg:rSG,iv:rInvest,bk:rsBRK};if(fn[t])fn[t]();}
 
 function getSD(){const m={};AS.forEach(s=>{const sec=s.sector||'Others';if(!m[sec])m[sec]={n:0,d:0,w:0};m[sec].n++;m[sec].d+=s.pctChange;m[sec].w+=s.weekChg||0;});return Object.entries(m).map(([name,d])=>{const avgD=d.d/d.n,avgW=d.w/d.n;const state=avgW>1.5?'Momentum':avgW<-1.5?'Selling':Math.abs(avgW)<0.5?'Ranging':'Recovering';return{name,avgD,avgW,state};}).sort((a,b)=>b.avgW-a.avgW);}
 
@@ -6227,6 +6249,213 @@ function patInsideTFRow(active) {
     </button>`).join('')}
   </div>`;
 }
+
+// ── BREAKOUT SCREENER ─────────────────────────────────────────────────────────
+// Shows stocks that broke OUT of their range (opposite of Ranging tab)
+
+function rsBRK() {
+  const tf   = BRK_SUB;
+  const area = document.getElementById('area');
+  if (!area) return;
+
+  // Filter + score
+  const stocks = AS
+    .filter(s => s.daily?.c?.length >= 60 && (s.mcap === 0 || s.mcap >= 800e7))
+    .map(s => { const r = brkScore(s, tf); return r ? { ...s, brkData: r } : null; })
+    .filter(Boolean)
+    .sort((a, b) => b.brkData.strength - a.brkData.strength);
+
+  const tfLabels = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', yearly:'Yearly' };
+
+  // ATH vs Swing — both computed before any branching
+  const athStocks   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
+  const swingStocks = stocks.filter(s => classifyBreakout(s,'') === 'swing');
+  const viewStocks  = SC_VIEW === 'ath' ? athStocks : swingStocks;
+
+  const swBg = SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)';
+  const swCl = SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)';
+  const atBg = SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)';
+  const atCl = SC_VIEW==='ath'?'#fde68a':'var(--muted2)';
+  const subtabs = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
+    + '<button onclick="SC_VIEW='swing';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+swBg+';color:'+swCl+';border-right:1px solid var(--border2)">⚡ Swing ('+swingStocks.length+')</button>'
+    + '<button onclick="SC_VIEW='ath';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+atBg+';color:'+atCl+'">🚀 ATH ('+athStocks.length+')</button>'
+    + '</div>';
+
+  // Sub-timeframe selector (rendered inline since Breakout is a top-level tab)
+  const tfSelector = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'
+    + [{k:'daily',l:'📈 Daily',d:'Last session'},{k:'weekly',l:'📅 Weekly',d:"This week's break"},
+       {k:'monthly',l:'🗓 Monthly',d:'Month high break'},{k:'yearly',l:'🏆 Yearly',d:'52W high'}]
+      .map(t=>'<button onclick="BRK_SUB=''+t.k+'';rsBRK()" style="padding:6px 12px;border-radius:8px;'
+        +'font-size:.7rem;font-weight:700;cursor:pointer;border:1px solid '
+        +(tf===t.k?'#a855f7':'var(--border2)')+';background:'
+        +(tf===t.k?'rgba(168,85,247,.2)':'var(--card2)')+';color:'
+        +(tf===t.k?'#d8b4fe':'var(--muted2)')+'"><div>'+t.l+'</div>'
+        +'<div style="font-size:.56rem;opacity:.7;margin-top:1px">'+t.d+'</div></button>').join('')
+    + '</div>';
+
+  const banner = `
+    <div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.2);
+                border-radius:12px;padding:13px 16px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:1rem">📈</span>
+        <div style="flex:1">
+          <div style="font-size:.88rem;font-weight:800;color:var(--text)">${tfLabels[tf]} Range Breakouts</div>
+          <div style="font-size:.67rem;color:var(--muted2);margin-top:2px">
+            Stocks breaking above their ${tf} range high on volume
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.8rem;font-weight:700;color:#d8b4fe">${stocks.length} found</div>
+          <div style="font-size:.62rem;color:var(--muted2)">${AS.length} scanned</div>
+        </div>
+      </div>
+    </div>`;
+
+  if (!stocks.length) {
+    area.innerHTML = tfSelector + banner + subtabs + `<div class="ibox" style="color:var(--yellow)">
+      No ${tfLabels[tf].toLowerCase()} breakouts right now. Try another timeframe.</div>`;
+    return;
+  }
+
+  area.innerHTML = tfSelector + banner + subtabs +
+    `<div class="srow" style="margin-bottom:14px;flex-wrap:wrap;gap:6px">
+      <div class="pill"><strong>${viewStocks.length}</strong> ${SC_VIEW==='ath'?'ATH':'Swing'}</div>
+      <div class="pill"><strong style="color:#d8b4fe">${viewStocks.filter(s=>s.brkData.strength>=70).length}</strong> Strong</div>
+      <div class="pill"><strong style="color:var(--yellow)">${viewStocks.filter(s=>s.brkData.type==='volume_confirmed').length}</strong> Vol Confirmed</div>
+    </div>` +
+    `<div class="grid">${viewStocks.slice(0,40).map(s => brkCardHTML(s, tf)).join('')}</div>`;
+}
+
+function brkScore(s, tf) {
+  const dc = s.daily?.c||[], dh = s.daily?.h||[], dl = s.daily?.l||[], dv = s.daily?.v||[];
+  const n = dc.length;
+  const price = s.price;
+  if (n < 22 || !price) return null;
+
+  const avgVol  = dv.slice(-21,-1).reduce((a,b)=>a+b,0)/20 || 1;
+  const curVol  = dv[n-1] || 0;
+  const volRatio = curVol / avgVol;
+
+  let rangeHigh, rangeLow, strength = 0, type = '';
+
+  if (tf === 'daily') {
+    // Broke above prior 5-day high (yesterday's session range)
+    rangeHigh = Math.max(...dh.slice(-6,-1));
+    rangeLow  = Math.min(...dl.slice(-6,-1));
+    if (price > rangeHigh) {
+      strength = 50;
+      if (volRatio >= 1.5) { strength = 72; type = 'volume_confirmed'; }
+      if (volRatio >= 2.5) { strength = 90; type = 'volume_confirmed'; }
+    }
+  } else if (tf === 'weekly') {
+    // Broke above prior 4-week high
+    rangeHigh = Math.max(...dh.slice(-22,-5));
+    rangeLow  = Math.min(...dl.slice(-22,-5));
+    if (price > rangeHigh) {
+      strength = 55;
+      if (volRatio >= 1.3) { strength = 72; type = 'volume_confirmed'; }
+      if (s.rsi && s.rsi >= 55 && s.rsi <= 80) strength += 8;
+    }
+  } else if (tf === 'monthly') {
+    // Broke above prior month's high (45 to 22 bars ago)
+    if (n < 50) return null;
+    rangeHigh = Math.max(...dh.slice(-45,-22));
+    rangeLow  = Math.min(...dl.slice(-45,-22));
+    if (price > rangeHigh) {
+      strength = 60;
+      if (volRatio >= 1.2) { strength = 75; type = 'volume_confirmed'; }
+      if (s.e20 && price > s.e20 && s.e50 && s.e20 > s.e50) strength += 10;
+    }
+  } else { // yearly
+    // At or near 52-week high (≥95%)
+    if (n < 100) return null;
+    rangeHigh = s.h52 || Math.max(...dc.slice(-252));
+    rangeLow  = s.l52 || Math.min(...dc.slice(-252));
+    const pct52 = rangeHigh !== rangeLow ? ((price-rangeLow)/(rangeHigh-rangeLow))*100 : 50;
+    if (pct52 >= 95) {
+      const freshBreak = n >= 252 ? dc[n-1] >= Math.max(...dc.slice(-252,-1))*0.999 : false;
+      strength = freshBreak ? 85 : 65;
+      if (volRatio >= 1.5) { strength = Math.min(97, strength+10); type = 'volume_confirmed'; }
+      if (freshBreak) type = 'fresh_52w';
+    }
+  }
+
+  if (strength === 0) return null;
+
+  // Trade levels
+  const atrArr = [];
+  for (let i = Math.max(1,n-14); i < n; i++)
+    atrArr.push(Math.max(dh[i]-dl[i],Math.abs(dh[i]-dc[i-1]),Math.abs(dl[i]-dc[i-1])));
+  const atr  = atrArr.length ? atrArr.reduce((a,b)=>a+b)/atrArr.length : price*0.02;
+  const sl   = +(price - atr*1.5).toFixed(2);
+  const risk = price - sl;
+  const tgt  = +(price + risk*2.5).toFixed(2);
+
+  return {
+    strength, type,
+    rangeHigh: +rangeHigh.toFixed(2),
+    rangeLow:  +rangeLow.toFixed(2),
+    volRatio:  +volRatio.toFixed(2),
+    atr:       +atr.toFixed(2),
+    sl, target: tgt, rr: 2.5,
+    breakPct: +((price-rangeHigh)/rangeHigh*100).toFixed(2),
+  };
+}
+
+function brkCardHTML(s, tf) {
+  const b = s.brkData;
+  const tv = `https://www.tradingview.com/chart/?symbol=NSE:${s.symbol}`;
+  const strCol = b.strength >= 80 ? 'var(--green)' : b.strength >= 60 ? '#a855f7' : 'var(--yellow)';
+  const typeLabel = b.type === 'volume_confirmed' ? '✅ Vol Confirmed' :
+                    b.type === 'fresh_52w'         ? '🏆 New 52W High' : '📈 Breaking Out';
+  const cat = classifyBreakout(s,'');
+  const catBadge = cat === 'ath_momentum'
+    ? '<span style="font-size:.55rem;padding:1px 5px;border-radius:6px;background:rgba(245,197,24,.15);color:#fde68a;font-weight:700">🚀 ATH</span>'
+    : '<span style="font-size:.55rem;padding:1px 5px;border-radius:6px;background:rgba(168,85,247,.15);color:#d8b4fe;font-weight:700">⚡ Swing</span>';
+
+  return `<div class="card" style="--accent-line:#a855f7">
+    <div class="ch">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="sym">${s.symbol}</span>
+          ${catBadge}
+          <span style="font-size:.6rem;padding:2px 7px;border-radius:10px;font-weight:700;
+            background:rgba(168,85,247,.1);color:#d8b4fe;border:1px solid rgba(168,85,247,.2)">${typeLabel}</span>
+        </div>
+        <div class="cn">${s.name||''}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="cp">₹${s.price?.toFixed(s.price>=100?1:2)||'–'}</div>
+        <div style="font-size:.72rem;font-weight:700;color:${strCol}">${b.strength}% strength</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin:8px 0;font-size:.67rem;flex-wrap:wrap">
+      <span style="color:var(--green)">Broke: ₹${b.rangeHigh}</span>
+      <span style="color:var(--muted2)">+${b.breakPct}% above</span>
+      <span style="color:${b.volRatio>=1.5?'var(--green)':'var(--muted2)'}">Vol ${b.volRatio}x</span>
+      ${s.rsi?`<span style="color:var(--muted2)">RSI ${s.rsi.toFixed(0)}</span>`:''}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px">
+      <div style="background:var(--card2);border-radius:7px;padding:6px;text-align:center">
+        <div style="font-size:.55rem;color:var(--muted2)">Entry</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text)">₹${s.price?.toFixed(0)}</div>
+      </div>
+      <div style="background:rgba(255,69,96,.08);border-radius:7px;padding:6px;text-align:center">
+        <div style="font-size:.55rem;color:var(--muted2)">SL</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--red)">₹${b.sl}</div>
+      </div>
+      <div style="background:rgba(0,212,154,.08);border-radius:7px;padding:6px;text-align:center">
+        <div style="font-size:.55rem;color:var(--muted2)">Target</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--green)">₹${b.target}</div>
+      </div>
+    </div>
+    <div class="ca" style="margin-top:8px">
+      <button class="btn btn-ghost" onclick="togWL('${s.symbol}')">${WL.includes(s.symbol)?'⭐':'☆'} Watch</button>
+      <a href="${tv}" target="_blank" class="btn btn-ghost">📊 Chart</a>
+    </div>
+  </div>`;
+}
+
 
 function rsPAT() {
   if(CT !== 'sc') return;
