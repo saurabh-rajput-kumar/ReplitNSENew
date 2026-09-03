@@ -6277,15 +6277,15 @@ function rsBRK() {
   const atBg = SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)';
   const atCl = SC_VIEW==='ath'?'#fde68a':'var(--muted2)';
   const subtabs = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
-    + '<button onclick="SC_VIEW='swing';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+swBg+';color:'+swCl+';border-right:1px solid var(--border2)">⚡ Swing ('+swingStocks.length+')</button>'
-    + '<button onclick="SC_VIEW='ath';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+atBg+';color:'+atCl+'">🚀 ATH ('+athStocks.length+')</button>'
+    + '<button onclick="SC_VIEW=\'swing\';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+swBg+';color:'+swCl+';border-right:1px solid var(--border2)">⚡ Swing ('+swingStocks.length+')</button>'
+    + '<button onclick="SC_VIEW=\'ath\';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+atBg+';color:'+atCl+'">🚀 ATH ('+athStocks.length+')</button>'
     + '</div>';
 
   // Sub-timeframe selector (rendered inline since Breakout is a top-level tab)
   const tfSelector = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'
     + [{k:'daily',l:'📈 Daily',d:'Last session'},{k:'weekly',l:'📅 Weekly',d:"This week's break"},
        {k:'monthly',l:'🗓 Monthly',d:'Month high break'},{k:'yearly',l:'🏆 Yearly',d:'52W high'}]
-      .map(t=>'<button onclick="BRK_SUB=''+t.k+'';rsBRK()" style="padding:6px 12px;border-radius:8px;'
+      .map(t=>'<button onclick="BRK_SUB=\''+t.k+'\';rsBRK()" style="padding:6px 12px;border-radius:8px;'
         +'font-size:.7rem;font-weight:700;cursor:pointer;border:1px solid '
         +(tf===t.k?'#a855f7':'var(--border2)')+';background:'
         +(tf===t.k?'rgba(168,85,247,.2)':'var(--card2)')+';color:'
