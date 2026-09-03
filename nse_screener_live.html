@@ -2274,7 +2274,9 @@ async function silRef(){if(!AS.length)return;const b=document.getElementById('lb
 let BG_LOADING = false;
 
 async function loadData(){
-  const b=document.getElementById('lbtn');b.disabled=true;b.textContent='⏳ Loading...';
+  const b=document.getElementById('lbtn');
+  if(b.disabled && b.textContent==='⏳ Loading...') return; // already loading
+  b.disabled=true;b.textContent='⏳ Loading...';
   WP=0;AS=[];
   document.getElementById('area').innerHTML=`<div class="loader"><div class="spin"></div><div class="lt" id="lg">Loading Nifty 500 core...</div><div class="pw"><div class="pb2" id="pb" style="width:0%"></div></div></div>`;
 
@@ -9233,10 +9235,10 @@ window.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('wlc').textContent=WL.length;
   document.getElementById('alc').textContent=ALT.filter(a=>!a.triggered).length;
   // Initialize strategy panel — default to 5-Day
-  setTF('2w');
+  setTF('pos');
   mktStatusBadge();
-  // Auto-load data on page open
-  setTimeout(loadData, 400);
+  // Auto-load data on page open — retry on failure
+  setTimeout(loadData, 800);
 });
 </script>
 
