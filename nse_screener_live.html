@@ -2274,9 +2274,7 @@ async function silRef(){if(!AS.length)return;const b=document.getElementById('lb
 let BG_LOADING = false;
 
 async function loadData(){
-  const b=document.getElementById('lbtn');
-  if(b.disabled && b.textContent==='⏳ Loading...') return; // already loading
-  b.disabled=true;b.textContent='⏳ Loading...';
+  const b=document.getElementById('lbtn');b.disabled=true;b.textContent='⏳ Loading...';
   WP=0;AS=[];
   document.getElementById('area').innerHTML=`<div class="loader"><div class="spin"></div><div class="lt" id="lg">Loading Nifty 500 core...</div><div class="pw"><div class="pb2" id="pb" style="width:0%"></div></div></div>`;
 
@@ -5499,33 +5497,24 @@ function ivRenderResults(results) {
 
 function rsBRK() {
   if(CT !== 'sc') return;
-  const tf   = BRK_SUB;
+  const tf = BRK_SUB;
   const area = document.getElementById('area');
 
-  // Score + filter — fixed mcap filter operator precedence
+  // Score + filter stocks
   let stocks = AS
-    .filter(s => s.daily?.c?.length >= 60 && (s.mcap === 0 || s.mcap >= 800e7))
-    .map(s => { const r = brkScore(s, tf); return r ? { ...s, brkData: r } : null; })
+    .filter(s => s.daily?.c?.length >= 60 && s.mcap === 0 || s.mcap >= 800e7)
+    .map(s => {
+      const result = brkScore(s, tf);
+      return result ? { ...s, brkData: result } : null;
+    })
     .filter(Boolean)
     .sort((a, b) => b.brkData.strength - a.brkData.strength);
 
+  // Stats header
   const tfLabels = { daily:'Daily', weekly:'Weekly', monthly:'Monthly', yearly:'Yearly' };
+  const tfColor  = '#a855f7';
 
-  // ATH vs Swing split — computed once, used in both empty and results paths
-  const athStocks   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
-  const swingStocks = stocks.filter(s => classifyBreakout(s,'') === 'swing');
-  const viewStocks  = SC_VIEW === 'ath' ? athStocks : swingStocks;
-
-  const swBg = SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)';
-  const swCl = SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)';
-  const atBg = SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)';
-  const atCl = SC_VIEW==='ath'?'#fde68a':'var(--muted2)';
-  const subtabs = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
-    + '<button onclick="SC_VIEW='swing';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+swBg+';color:'+swCl+';border-right:1px solid var(--border2)">⚡ Swing ('+swingStocks.length+')</button>'
-    + '<button onclick="SC_VIEW='ath';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+atBg+';color:'+atCl+'">🚀 ATH ('+athStocks.length+')</button>'
-    + '</div>';
-
-  const banner = `
+  const stratBanner = `
     <div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.2);
                 border-radius:12px;padding:13px 16px;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -5533,29 +5522,45 @@ function rsBRK() {
         <div style="flex:1">
           <div style="font-size:.88rem;font-weight:800;color:var(--text)">${tfLabels[tf]} Breakout Screener</div>
           <div style="font-size:.67rem;color:var(--muted2);margin-top:2px">
-            Stocks breaking above their ${tf} range high on volume
+            Stocks breaking above their ${tf} range high on volume confirmation
           </div>
         </div>
         <div style="text-align:right">
-          <div style="font-size:.8rem;font-weight:700;color:#d8b4fe">${stocks.length} found</div>
+          <div style="font-size:.8rem;font-weight:700;color:#d8b4fe">${stocks.length} breakouts</div>
           <div style="font-size:.62rem;color:var(--muted2)">${AS.length} scanned</div>
         </div>
       </div>
     </div>`;
 
   if (!stocks.length) {
-    area.innerHTML = banner + subtabs + `<div class="ibox" style="color:var(--yellow)">
-      No ${tfLabels[tf].toLowerCase()} breakouts found. Try another timeframe or reload after market hours.</div>`;
+  
+  // ── ATH vs Swing sub-tabs ──────────────────────────────────────────────────
+  const __ath_rsBRK   = stocks.filter(s => classifyBreakout(s,'') === 'ath_momentum');
+  const __swing_rsBRK = stocks.filter(s => classifyBreakout(s,'') === 'swing');
+  const __view_rsBRK  = SC_VIEW === 'ath' ? __ath_rsBRK : __swing_rsBRK;
+  const __swBg_brk = SC_VIEW==='swing'?'rgba(168,85,247,.2)':'var(--card2)';
+  const __swCl_brk = SC_VIEW==='swing'?'#f5d0fe':'var(--muted2)';
+  const __atBg_brk = SC_VIEW==='ath'?'rgba(245,197,24,.15)':'var(--card2)';
+  const __atCl_brk = SC_VIEW==='ath'?'#fde68a':'var(--muted2)';
+  const __subtabs_rsBRK = '<div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;overflow:hidden">'
+    + '<button onclick="SC_VIEW=\'swing\';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+__swBg_brk+';color:'+__swCl_brk+';border-right:1px solid var(--border2)">⚡ Swing ('+__swing_rsBRK.length+')</button>'
+    + '<button onclick="SC_VIEW=\'ath\';rsBRK()" style="flex:1;padding:7px;font-size:.7rem;font-weight:800;cursor:pointer;border:none;background:'+__atBg_brk+';color:'+__atCl_brk+'">🚀 ATH ('+__ath_rsBRK.length+')</button>'
+    + '</div>'
+
+  area.innerHTML = stratBanner + __subtabs_rsBRK + `<div class="ibox" style="color:var(--yellow)">
+      No ${tfLabels[tf].toLowerCase()} breakouts detected. This is normal — genuine breakouts are rare.
+      Try a different timeframe or check again after market hours.
+    </div>`;
     return;
   }
 
-  area.innerHTML = banner + subtabs +
+  area.innerHTML = stratBanner +
     `<div class="srow" style="margin-bottom:14px;flex-wrap:wrap;gap:6px">
-      <div class="pill"><strong>${viewStocks.length}</strong> ${SC_VIEW==='ath'?'ATH':'Swing'}</div>
-      <div class="pill"><strong style="color:#d8b4fe">${viewStocks.filter(s=>s.brkData.strength>=70).length}</strong> Strong</div>
-      <div class="pill"><strong style="color:var(--yellow)">${viewStocks.filter(s=>s.brkData.type==='volume_confirmed').length}</strong> Vol Confirmed</div>
+      <div class="pill"><strong>${stocks.length}</strong> Breakouts</div>
+      <div class="pill"><strong style="color:#d8b4fe">${stocks.filter(s=>s.brkData.strength>=70).length}</strong> Strong</div>
+      <div class="pill"><strong style="color:var(--yellow)">${stocks.filter(s=>s.brkData.type==='volume_confirmed').length}</strong> Vol Confirmed</div>
     </div>` +
-    `<div class="grid">${viewStocks.slice(0,40).map(s => brkCardHTML(s, tf)).join('')}</div>`;
+    `<div class="grid">${__view_rsBRK.slice(0,40).map(s => brkCardHTML(s, tf)).join('')}</div>`;
 }
 
 function brkScore(s, tf) {
@@ -9235,10 +9240,10 @@ window.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('wlc').textContent=WL.length;
   document.getElementById('alc').textContent=ALT.filter(a=>!a.triggered).length;
   // Initialize strategy panel — default to 5-Day
-  setTF('pos');
+  setTF('2w');
   mktStatusBadge();
-  // Auto-load data on page open — retry on failure
-  setTimeout(loadData, 800);
+  // Auto-load data on page open
+  setTimeout(loadData, 400);
 });
 </script>
 
